@@ -62,6 +62,23 @@ async def test_successful_completion() -> None:
     await provider.aclose()
 
 
+async def test_uses_bearer_auth_header_not_legacy_x_api_key() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return _success_handler(request)
+
+    provider = AnthropicProvider(
+        _SPEC, api_key="sk-ant-fake-bearer-key", http_client=_client(handler)
+    )
+    await provider.complete(_request())
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    assert headers.get("authorization") == "Bearer sk-ant-fake-bearer-key"
+    assert "x-api-key" not in headers
+
+
 async def test_system_messages_are_extracted_into_system_field() -> None:
     captured: dict[str, object] = {}
 

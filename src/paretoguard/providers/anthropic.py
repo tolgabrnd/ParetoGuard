@@ -2,8 +2,12 @@
 
 Request/response shapes follow Anthropic's documented Messages API. Provider APIs
 evolve — verify field names against current Anthropic docs before relying on this
-in production (see docs/LIMITATIONS.md). Tested entirely via
+in production (see docs/PROVIDER_COMPATIBILITY.md). Tested entirely via
 `httpx.MockTransport`; never calls the real API in tests.
+
+Authenticates with `Authorization: Bearer <key>`, the header platform.claude.com's
+authentication docs currently document as the recommended method (verified
+2026-09-22); the legacy `x-api-key` header still works but isn't used here.
 """
 
 import time
@@ -64,7 +68,7 @@ class AnthropicProvider(Provider):
         start = time.perf_counter()
         payload = _build_payload(request)
         headers = {
-            "x-api-key": self._api_key,
+            "Authorization": f"Bearer {self._api_key}",
             "anthropic-version": ANTHROPIC_VERSION,
             "content-type": "application/json",
         }
