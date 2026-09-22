@@ -12,6 +12,9 @@ stronger claims than the evidence supports.
 - Estimated cost is computed from a versioned local pricing table (`configs/pricing.example.yaml`)
   and may drift from actual provider billing if prices change after that version's
   effective date.
+- Provider REST APIs themselves change — see `docs/PROVIDER_COMPATIBILITY.md` for
+  which API surface each adapter targets, when it was last verified against
+  official docs, and known deprecation risk per provider.
 
 ## Benchmarks
 

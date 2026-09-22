@@ -1,13 +1,27 @@
 """Gemini adapter: talks to the generateContent REST API directly over httpx.
 
-Request/response shapes follow Google's documented Gemini generateContent API.
-Provider APIs evolve — verify field names against current Gemini docs before
-relying on this in production (see docs/LIMITATIONS.md). Tested entirely via
-`httpx.MockTransport`; never calls the real API in tests.
+As of 2026-09-22, Google's docs label generateContent "(Legacy)" and steer new
+projects toward the newer Interactions API (GA June 2026, stateful-by-default,
+optimized for agentic workflows). This adapter stays on generateContent
+deliberately, not by default: generateContent remains fully supported with no
+announced sunset date, its request/response schema was verified consistently
+across multiple independent official sources, and it fits ParetoGuard's
+stateless, full-history-per-call abstraction directly. The Interactions API's
+own documentation was inconsistent across sources on response field names
+(`steps` vs `execution_steps`) at verification time — implementing against that
+without being able to confirm the schema (no live calls allowed in this
+codebase) risked encoding a guess as fact, which violates this project's "never
+fabricate" rule more than staying on a documented-legacy-but-supported API does.
+See docs/PROVIDER_COMPATIBILITY.md for the full trade-off analysis and sources;
+revisit this once the Interactions schema can be verified with confidence.
 
 The API key is sent via the `x-goog-api-key` header rather than Gemini's
 alternative `?key=` query-string form, specifically so it never ends up in a
-request URL that might get logged or echoed back anywhere.
+request URL that might get logged or echoed back anywhere. Note: Google is
+retiring "standard" API keys in favor of "auth" keys (all standard keys
+rejected starting September 2026) — this is an operational credential concern
+for whoever configures GEMINI_API_KEY, not something this adapter's code can
+address.
 """
 
 import time
