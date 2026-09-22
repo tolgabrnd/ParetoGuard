@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Testing / coverage
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# Experiment data / local artifacts
+*.duckdb
+*.duckdb.wal
+benchmarks/results/**/*.parquet
+benchmarks/results/**/*.jsonl
+!benchmarks/results/.gitkeep
+
+# Dashboard
+apps/dashboard/node_modules/
+apps/dashboard/dist/
+apps/dashboard/.vite/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Docker
+.dockerignore
