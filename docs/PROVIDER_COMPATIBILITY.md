@@ -1,9 +1,10 @@
 # Provider Compatibility Audit
 
-**Date verified:** 2026-09-22 (Phase B.5, before Phase C). Verified against current
-official documentation via web research — no live/paid API calls were made. This
-document should be re-verified periodically; provider APIs change without notice
-(see docs/LIMITATIONS.md).
+**Date verified:** 2026-09-22 (Phase B.5, before Phase C; Gemini section re-verified
+and corrected the same day — see "Gemini" below). Verified against current official
+documentation via web research — no live/paid API calls were made. This document
+should be re-verified periodically; provider APIs change without notice (see
+docs/LIMITATIONS.md).
 
 ## Why this audit happened
 
@@ -106,72 +107,114 @@ knowing when configuring newer models.
 
 ## Gemini
 
-**API surface used:** `generateContent` — `POST /v1beta/models/{model}:generateContent`
-(kept; **not** migrated to the Interactions API)
+**API surface used:** Interactions API — `POST /v1beta/interactions`, stateless
+mode only (`"store": false`, no `previous_interaction_id`)
+(was: `generateContent` — see "Revision history" below)
 
-**The question this audit had to answer:** Google's current docs literally title
-the generateContent page "Gemini Generate Content API (Legacy)" and promote a
-newer Interactions API (GA June 2026) as the default for new projects, especially
-agentic ones. This is a real, confirmed deprecation-labeling — not a
-misunderstanding. So: should ParetoGuard migrate?
+**Why this changed from the initial Phase B.5 decision:** the first pass of this
+audit kept `generateContent`, citing schema inconsistency across sources for the
+Interactions API as the blocking concern (see git history / revision note below
+for that original reasoning). A follow-up re-verification pass resolved that
+inconsistency: `ai.google.dev/api/interactions-api`'s field-schema table (fetched
+directly, not a secondary summary) explicitly documents `input` as accepting
+`Content | array(Content) | array(Step) | string`, and a dedicated function-calling
+guide gave a complete, internally consistent round-trip example (tool declaration,
+`function_call` step, `function_result` step). With that resolved, the balance of
+evidence favored migrating: `generateContent` is explicitly labeled "(Legacy)" in
+its own page title, Interactions has been GA since June 2026 and is documented as
+the default for new projects, and its stateless mode is a first-class, fully
+documented option — not a workaround.
 
-**Decision: (c) — keep `generateContent`, with justification, revisit later.**
+**Stateless-mode rationale:** Interactions' *recommended* mode stores conversation
+history server-side, referenced via `previous_interaction_id` on later calls. That
+doesn't fit `paretoguard.providers.base.Provider`, which is a stateless
+`InferenceRequest` in / `InferenceResponse` out contract with no adapter-held
+session — adding session semantics would mean leaking a Gemini-specific concept
+into the generic interface, which the task explicitly ruled out. Google's own
+function-calling guide confirms `store: false` is not a degraded fallback: a
+single stateless request can carry a full `function_call`/`function_result`
+history in `input`, exactly like the OpenAI and Anthropic adapters already do by
+resending full message history every call. So every Gemini call from this adapter
+sends `"store": false` and never references `previous_interaction_id`.
 
-**Why not migrate now:**
-- `generateContent` has **no announced sunset date** and Google states it "will
-  continue to receive new mainline Gemini models for the foreseeable future."
-  Only *frontier* agent-specific capabilities are expected to land Interactions-only
-  going forward.
-- `generateContent`'s schema was verified **consistently across three independent
-  fetches** of official docs (contents/candidates/parts/usageMetadata field names
-  matched every time) — high confidence.
-- The Interactions API's schema, by contrast, was **inconsistent across sources**
-  at verification time: one official page described response items under
-  `execution_steps`, another under `steps`, and the exact request-array typing
-  for stateless mode (`input: [...]`, item `type` values) was only available from
-  one source with no independent corroboration. Given this project's explicit
-  "never fabricate results/capabilities" rule and the instruction not to make live
-  calls to verify empirically, implementing against a schema with unresolved
-  naming conflicts would mean shipping a guess presented as verified fact — a
-  worse outcome than staying on a well-documented "legacy" API.
-- **The trade-off the task asked about** — "would Interactions prevent the
-  normalized provider abstraction from working correctly?" — turned out to be
-  *no*: Interactions supports a genuine stateless mode (`store: false`) that
-  accepts a full multi-turn `input` array in one request, matching ParetoGuard's
-  per-request abstraction just as well as `generateContent` does. So the decision
-  to stay on `generateContent` is purely about verification confidence, not an
-  architectural incompatibility with Interactions.
+**What changed in the adapter:**
+- Endpoint: `/v1beta/models/{model}:generateContent` → `/v1beta/interactions`
+  (model moves from the URL path into the `model` request field)
+- Request: `contents[]` (role-tagged) → `input[]` of typed items. A bare
+  `{"type": "text", "text": ...}` item is implicitly the caller's turn (no role
+  field exists on `Content` items); a prior *assistant* turn must instead be
+  replayed as a `{"type": "model_output", "content": [...]}` **Step**, or the API
+  would read it as another user turn. Tool results become
+  `{"type": "function_result", "call_id", "name", "result"}` steps.
+- `systemInstruction: {"parts": [...]}` → `system_instruction` as a plain string
+- `generationConfig.maxOutputTokens`/`temperature` → `generation_config.max_output_tokens`/`temperature`
+- `tools[].functionDeclarations[]` → flat `tools: [{"type": "function", "name",
+  "description", "parameters"}]` (same flat shape now used by the OpenAI adapter)
+- Response: `candidates[].content.parts[]`/`finishReason` → `steps[]` of typed
+  items (`model_output`, `function_call`, `function_result`, `thought`, ...) plus
+  a top-level `status` (`completed`/`incomplete`/`failed`/...)
+- `usageMetadata.promptTokenCount`/`candidatesTokenCount`/`cachedContentTokenCount`
+  → `usage.total_input_tokens`/`total_output_tokens`/`total_cached_tokens`
+- Auth header **unchanged**: `x-goog-api-key: <key>` (Interactions uses the same
+  header as `generateContent` did — this is not affected by the standard-vs-auth
+  key transition below, only the *value* is)
 
-**Verified unchanged (no fix needed):**
-- Auth header `x-goog-api-key: <key>` — confirmed current/recommended over the
-  legacy `?key=` query param (and this adapter already avoided the query-param
-  form specifically to keep the key out of any logged URL)
-- Endpoint shape, `contents[]`/`systemInstruction`/`generationConfig`/`tools[].functionDeclarations`
-  request fields, `candidates[].content.parts[]`/`finishReason` response fields,
-  `usageMetadata.promptTokenCount`/`candidatesTokenCount`/`cachedContentTokenCount`
+**Normalized fields supported:** `output_text` (joined `model_output` step text),
+`tool_calls` (from `function_call` steps), `finish_reason` (from `status`, with
+`TOOL_CALLS` taking priority when tool calls are present), `token_usage` (from
+`usage`), `error` (from in-band `status: "failed"` + `errors[]`, or from
+transport/HTTP-level failures via the shared `providers/http.py` classifier),
+`latency` (measured locally, as with every adapter).
 
-**Operational risk found (not an adapter bug):** Google is retiring "standard" API
-keys in favor of identity-bound "auth" keys — unrestricted standard keys were
-rejected starting 2026-06-19, and **all** standard keys starting September 2026
-(i.e., now, at the time of this audit). This doesn't change any request/response
-schema or header name — the adapter just passes through whatever key string is in
-`GEMINI_API_KEY` — but a user hitting a 401/403 today may be running an old
-"standard" key rather than hitting an adapter bug. The adapter's existing
-generic 4xx → `PROVIDER_FAILURE(retryable=False)` classification already handles
-this reasonably (a non-retryable failure is the correct behavior either way); no
-code change was needed, but it's worth knowing when debugging.
+**Left in raw metadata, not normalized:** `thought` steps (extended-reasoning
+traces) have no equivalent in `InferenceResponse` — no normalized "reasoning"
+field exists, and adding one solely for Gemini would mean redesigning a core type
+around one provider's concept, which the task explicitly ruled out. Instead, the
+adapter sets `raw_provider_metadata = {"id": ..., "steps": ...}`, preserving the
+full, unprocessed `steps` array (thought steps included) for any caller that
+wants them, without losing that information silently.
 
-**Revisit trigger:** once the Interactions API's response schema can be confirmed
-from a single authoritative source without contradiction (or via an opt-in live
-smoke test — never in the default test suite), re-run this trade-off analysis.
+**Known residual uncertainty:** the `function_result` step's exact field set
+showed a minor inconsistency across official doc pages during verification — one
+example omitted `call_id`, a more detailed one (the dedicated function-calling
+guide) included it, correlating to the originating `function_call`'s `id`. This
+adapter sends `call_id`, matching the more detailed source; documented in the
+adapter's own docstring as the first thing to check if Gemini rejects or ignores
+that field. No live call was made to resolve this (per the task's constraint), so
+this is flagged rather than guessed past.
+
+**Verified, not changed by this migration:** the September-2026 standard-vs-auth
+API key transition (unrestricted standard keys rejected since 2026-06-19, all
+standard keys rejected starting September 2026) is unaffected by which endpoint
+is used — it's about the credential *value*, not the request shape or header
+name. Still an operational risk for whoever configures `GEMINI_API_KEY`, not
+something adapter code can detect or fix; the shared HTTP error classifier's
+generic 4xx → `PROVIDER_FAILURE(retryable=False)` already handles an auth
+rejection reasonably.
 
 **Sources:**
+- [Interactions API reference](https://ai.google.dev/api/interactions-api) — authoritative field-schema table resolving the `Content`-vs-`Step` `input` typing
 - [Interactions API overview](https://ai.google.dev/gemini-api/docs/interactions-overview)
-- [generateContent reference](https://ai.google.dev/api/generate-content)
-- [Using Gemini API keys (generateContent/Legacy)](https://ai.google.dev/gemini-api/docs/generate-content/api-key)
+- [Function calling with the Gemini API](https://ai.google.dev/gemini-api/docs/interactions/function-calling) — full stateless tool-call round-trip example
+- [Interactions API quickstart](https://ai.google.dev/gemini-api/docs/interactions/quickstart) — endpoint, `x-goog-api-key` header, response shape
+- [generateContent reference (now legacy)](https://ai.google.dev/api/generate-content) — confirms no announced sunset date for the old API
 - Standard-key retirement timeline, cross-checked across DoiT and Cybernews
   coverage of Google's own announcement (both cite the same June 19 / September
   2026 dates)
+
+### Revision history
+
+- **2026-09-22, first pass:** decided to keep `generateContent`, citing
+  unresolved `execution_steps`-vs-`steps` naming inconsistency across two
+  sources as insufficient confidence to migrate.
+- **2026-09-22, same day, corrected:** re-verified directly against the
+  Interactions API's authoritative field-schema reference and a dedicated
+  function-calling guide, which resolved the inconsistency (`steps` is correct;
+  `execution_steps` was prose in an overview page, not a field name) and
+  provided a complete, internally consistent request/response example. Migrated
+  to Interactions on that basis. This revision history is kept rather than
+  deleted so the reasoning trail — including what changed and why — stays
+  auditable.
 
 ## `pyproject.toml` changes
 
