@@ -1,9 +1,14 @@
-"""OpenAI adapter: talks to the Chat Completions REST API directly over httpx.
+"""OpenAI adapter: talks to the Responses API directly over httpx.
 
-Request/response shapes follow OpenAI's documented Chat Completions API. Provider
-APIs evolve — verify field names against current OpenAI docs before relying on
-this in production (see docs/LIMITATIONS.md). Tested entirely via
-`httpx.MockTransport`; never calls the real API in tests.
+Uses `POST /v1/responses`, not the older Chat Completions endpoint
+(`/v1/chat/completions`). As of this adapter's last verification (2026-09-22,
+against developers.openai.com), Chat Completions is not deprecated and still
+works, but OpenAI documents Responses as "recommended for all new projects" —
+particularly agentic ones, which is what ParetoGuard's tool-use/agent evaluation
+work needs. See docs/PROVIDER_COMPATIBILITY.md for the verification notes and
+sources.
+
+Tested entirely via `httpx.MockTransport`; never calls the real API in tests.
 """
 
 import json
@@ -20,6 +25,7 @@ from paretoguard.core.models import (
     InferenceResponse,
     LatencyRecord,
     Message,
+    Role,
     TokenUsage,
     ToolCall,
     ToolSpec,
@@ -30,16 +36,14 @@ from paretoguard.providers.http import call_json_endpoint, resolve_api_key
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
-_FINISH_REASON_MAP = {
-    "stop": FinishReason.STOP,
-    "length": FinishReason.LENGTH,
-    "tool_calls": FinishReason.TOOL_CALLS,
-    "content_filter": FinishReason.CONTENT_FILTER,
+_STATUS_FINISH_REASON_MAP = {
+    "completed": FinishReason.STOP,
+    "incomplete": FinishReason.LENGTH,
 }
 
 
 class OpenAIProvider(Provider):
-    """Adapter for OpenAI-compatible Chat Completions endpoints."""
+    """Adapter for the OpenAI Responses API (`POST /v1/responses`)."""
 
     def __init__(
         self,
@@ -66,7 +70,7 @@ class OpenAIProvider(Provider):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
-        url = f"{self._base_url}/chat/completions"
+        url = f"{self._base_url}/responses"
 
         body, error = await call_json_endpoint(
             self._client,
@@ -83,88 +87,103 @@ class OpenAIProvider(Provider):
 
 
 def _build_payload(request: InferenceRequest) -> dict[str, Any]:
+    system_messages = [m.content for m in request.messages if m.role == Role.SYSTEM]
+    conversation = [m for m in request.messages if m.role != Role.SYSTEM]
+
     payload: dict[str, Any] = {
         "model": request.model,
-        "messages": [_message_to_openai(m) for m in request.messages],
+        "input": [_message_to_input_item(m) for m in conversation],
     }
+    if system_messages:
+        payload["instructions"] = "\n\n".join(system_messages)
     if request.max_output_tokens is not None:
-        payload["max_tokens"] = request.max_output_tokens
+        payload["max_output_tokens"] = request.max_output_tokens
     if request.temperature is not None:
         payload["temperature"] = request.temperature
     if request.tools:
         payload["tools"] = [_tool_to_openai(t) for t in request.tools]
     if request.structured_output_schema is not None:
-        payload["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
+        payload["text"] = {
+            "format": {
+                "type": "json_schema",
                 "name": "response",
                 "schema": request.structured_output_schema,
                 "strict": True,
-            },
+            }
         }
     return payload
 
 
-def _message_to_openai(message: Message) -> dict[str, Any]:
-    out: dict[str, Any] = {"role": message.role.value, "content": message.content}
-    if message.tool_call_id is not None:
-        out["tool_call_id"] = message.tool_call_id
-    if message.name is not None:
-        out["name"] = message.name
-    return out
+def _message_to_input_item(message: Message) -> dict[str, Any]:
+    if message.role == Role.TOOL:
+        return {
+            "type": "function_call_output",
+            "call_id": message.tool_call_id,
+            "output": message.content,
+        }
+    return {"role": message.role.value, "content": message.content}
 
 
 def _tool_to_openai(tool: ToolSpec) -> dict[str, Any]:
     return {
         "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters_schema,
-        },
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters_schema,
     }
 
 
 def _parse_response(
     provider_name: str, request: InferenceRequest, body: dict[str, Any], elapsed_ms: float
 ) -> InferenceResponse:
-    choices = body.get("choices") or []
-    if not choices:
+    status = body.get("status", "completed")
+
+    if status == "failed":
+        error_body = body.get("error") or {}
         return _error_response(
             provider_name,
             request,
             ErrorInfo(
-                category=FailureCategory.SCHEMA_FAILURE,
-                message="response had no choices",
+                category=FailureCategory.PROVIDER_FAILURE,
+                message=str(error_body.get("message", "response generation failed")),
                 retryable=False,
             ),
             elapsed_ms,
         )
-    choice = choices[0]
-    message = choice.get("message") or {}
-    finish_reason = _FINISH_REASON_MAP.get(choice.get("finish_reason", ""), FinishReason.STOP)
 
-    tool_calls = [
-        ToolCall(
-            id=tc["id"],
-            name=tc["function"]["name"],
-            arguments=_safe_json_loads(tc["function"].get("arguments", "{}")),
-        )
-        for tc in message.get("tool_calls") or []
-    ]
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for item in body.get("output") or []:
+        item_type = item.get("type")
+        if item_type == "message":
+            for block in item.get("content") or []:
+                if block.get("type") == "output_text":
+                    text_parts.append(block.get("text", ""))
+        elif item_type == "function_call":
+            tool_calls.append(
+                ToolCall(
+                    id=item.get("call_id") or item.get("id", ""),
+                    name=item.get("name", ""),
+                    arguments=_safe_json_loads(item.get("arguments", "{}")),
+                )
+            )
+
+    finish_reason = _STATUS_FINISH_REASON_MAP.get(status, FinishReason.STOP)
+    if tool_calls:
+        finish_reason = FinishReason.TOOL_CALLS
 
     usage_raw = body.get("usage") or {}
     usage = TokenUsage(
-        input_tokens=usage_raw.get("prompt_tokens", 0),
-        output_tokens=usage_raw.get("completion_tokens", 0),
-        cached_input_tokens=(usage_raw.get("prompt_tokens_details") or {}).get("cached_tokens"),
+        input_tokens=usage_raw.get("input_tokens", 0),
+        output_tokens=usage_raw.get("output_tokens", 0),
+        cached_input_tokens=(usage_raw.get("input_tokens_details") or {}).get("cached_tokens"),
     )
 
     return InferenceResponse(
         request_id=request.request_id,
         provider=provider_name,
         model=body.get("model", request.model),
-        output_text=message.get("content"),
+        output_text="\n".join(text_parts) if text_parts else None,
         finish_reason=finish_reason,
         tool_calls=tool_calls,
         token_usage=usage,
