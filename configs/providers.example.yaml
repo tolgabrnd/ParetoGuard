@@ -1,0 +1,25 @@
+# Copy to providers.yaml and adjust. `kind` selects which adapter implementation is
+# used (paretoguard.providers); it is not a claim about which provider is "best".
+providers:
+  - name: mock
+    kind: mock
+    timeout_s: 5.0
+    max_retries: 0
+
+  - name: openai
+    kind: openai
+    api_key_env_var: OPENAI_API_KEY
+    timeout_s: 60.0
+    max_retries: 3
+
+  - name: anthropic
+    kind: anthropic
+    api_key_env_var: ANTHROPIC_API_KEY
+    timeout_s: 60.0
+    max_retries: 3
+
+  - name: gemini
+    kind: gemini
+    api_key_env_var: GEMINI_API_KEY
+    timeout_s: 60.0
+    max_retries: 3

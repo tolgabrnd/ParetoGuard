@@ -1,0 +1,29 @@
+# Copy to models.yaml and adjust. Real provider model entries are intentionally not
+# pre-filled here: model identifiers, context windows, and capabilities change over
+# time and must be verified against the provider's current documentation rather than
+# copied from an example file. The two mock models below back the offline demo and
+# require no credentials.
+models:
+  - name: mock-strong
+    provider: mock
+    context_window: 128000
+    max_output_tokens: 4096
+    supports_tools: true
+    supports_structured_output: true
+    capabilities: [reasoning, structured_output, tool_use]
+
+  - name: mock-cheap
+    provider: mock
+    context_window: 16000
+    max_output_tokens: 2048
+    supports_tools: true
+    supports_structured_output: false
+    capabilities: [structured_output]
+
+  # - name: <real-model-id>
+  #   provider: openai   # must match a provider `name` in providers.yaml
+  #   context_window: <verify against provider docs>
+  #   max_output_tokens: <verify against provider docs>
+  #   supports_tools: true
+  #   supports_structured_output: true
+  #   capabilities: [reasoning, structured_output, tool_use]

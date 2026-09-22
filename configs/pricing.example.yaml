@@ -1,0 +1,27 @@
+# Copy to pricing.yaml and adjust. Prices change over time — every entry is
+# versioned with the date it took effect, and PricingTable.price_for() always
+# selects the most recent entry at or before the date being priced. Mock models
+# are priced at zero since MockProvider makes no real API calls. Real-provider
+# prices are NOT pre-filled: copy current figures from the provider's own pricing
+# page and record the date you copied them, rather than trusting stale numbers.
+entries:
+  - provider: mock
+    model: mock-strong
+    input_price_per_million_usd: 0.0
+    output_price_per_million_usd: 0.0
+    version: "2026-09-22"
+    effective_date: "2026-09-22"
+
+  - provider: mock
+    model: mock-cheap
+    input_price_per_million_usd: 0.0
+    output_price_per_million_usd: 0.0
+    version: "2026-09-22"
+    effective_date: "2026-09-22"
+
+  # - provider: openai
+  #   model: <real-model-id>
+  #   input_price_per_million_usd: <verify against provider pricing page>
+  #   output_price_per_million_usd: <verify against provider pricing page>
+  #   version: "<date you verified this>"
+  #   effective_date: "<date this price took effect>"
