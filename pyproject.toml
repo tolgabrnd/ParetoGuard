@@ -33,11 +33,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-openai = ["openai>=1.51"]
-anthropic = ["anthropic>=0.36"]
-gemini = ["google-genai>=0.3"]
+# OpenAI/Anthropic/Gemini adapters call each provider's REST API directly over
+# httpx (see src/paretoguard/providers/), not the official SDKs, so no SDK
+# extras are declared for them. `torch` is for the optional PyTorch router
+# baseline (planned, not yet implemented).
 torch = ["torch>=2.4"]
-all = ["paretoguard[openai,anthropic,gemini,torch]"]
 
 [project.scripts]
 paretoguard = "paretoguard.cli.main:app"
