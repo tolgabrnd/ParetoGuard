@@ -15,7 +15,7 @@ phases; each phase stops for review before the next begins.
 
 | Phase | Commits | Scope | Status |
 |-------|---------|-------|--------|
-| A | 01-05 | Toolchain, docs, contributor workflow, domain models, storage | In progress |
+| A | 01-05 | Toolchain, docs, contributor workflow, domain models, storage | Done |
 | B | 06-11 | Provider protocol, MockProvider, runtime, OpenAI/Anthropic/Gemini adapters, telemetry | Not started |
 | C | 12-17 | Eval schema, graders, benchmark runner, extraction/numeric/context/tool-use suites, consistency metrics | Not started |
 | D | 18-24 | Static/rule/Pareto/reliability routers, learned routing (dataset, calibrated model, optional Torch), confidence/abstention | Not started |
