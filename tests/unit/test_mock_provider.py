@@ -49,10 +49,13 @@ async def test_exact_json_scenario() -> None:
 
 
 async def test_delayed_scenario_actually_waits() -> None:
+    # A generous margin below the requested delay: this only needs to confirm the
+    # scenario really sleeps (vs. being a no-op), not pin an exact millisecond
+    # boundary that Windows timer-resolution jitter can occasionally undershoot.
     provider = MockProvider()
-    response = await provider.complete(_request(MockScenario.DELAYED, mock_delay_ms=20))
+    response = await provider.complete(_request(MockScenario.DELAYED, mock_delay_ms=50))
     assert response.succeeded
-    assert response.latency.total_latency_ms >= 20
+    assert response.latency.total_latency_ms >= 35
 
 
 async def test_timeout_scenario_returns_retryable_error() -> None:
