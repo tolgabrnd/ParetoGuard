@@ -13,6 +13,7 @@ Model names/labels here are always synthetic (`profile-a`, etc., or whatever
 the caller names them) — never a real commercial provider or model name.
 """
 
+import json
 from dataclasses import dataclass, field
 from random import Random
 
@@ -25,6 +26,7 @@ from paretoguard.core.models import (
     InferenceResponse,
     LatencyRecord,
     TokenUsage,
+    ToolCall,
 )
 from paretoguard.providers.base import Provider
 
@@ -162,6 +164,41 @@ class ProfiledMockProvider(Provider):
                     ),
                     retryable=False,
                 ),
+            )
+
+        # On a SIMULATED success, echo back whatever this case's metadata
+        # says the correct answer is — the same MockProvider-recognized
+        # keys (mock_json_answer/mock_tool_calls/mock_answer_text) every
+        # built-in suite already sets, so a suite written for MockProvider's
+        # SUCCESS/EXACT_JSON scenarios is graded correctly here too, whether
+        # its grader checks output_text, structured_output, or tool_calls.
+        json_answer = request.metadata.get("mock_json_answer")
+        tool_calls_meta = request.metadata.get("mock_tool_calls")
+        if json_answer is not None:
+            output_repr = json.dumps(json_answer)
+            output_tokens = self._count_tokens(output_repr)
+            return InferenceResponse(
+                request_id=request.request_id,
+                provider=self.name,
+                model=request.model,
+                structured_output=json_answer,
+                finish_reason=FinishReason.STOP,
+                token_usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+                latency=LatencyRecord(total_latency_ms=latency_ms),
+            )
+        if tool_calls_meta:
+            tool_calls = [
+                ToolCall(id=f"sim-call-{i}", name=tc["name"], arguments=tc.get("arguments", {}))
+                for i, tc in enumerate(tool_calls_meta)
+            ]
+            return InferenceResponse(
+                request_id=request.request_id,
+                provider=self.name,
+                model=request.model,
+                tool_calls=tool_calls,
+                finish_reason=FinishReason.TOOL_CALLS,
+                token_usage=TokenUsage(input_tokens=input_tokens, output_tokens=1),
+                latency=LatencyRecord(total_latency_ms=latency_ms),
             )
 
         output_text = request.metadata.get(

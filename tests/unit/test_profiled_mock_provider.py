@@ -99,6 +99,40 @@ def test_simulated_profile_suite_has_no_globally_dominant_profile() -> None:
     assert max(wins.values()) < len(task_families)  # no profile wins every family
 
 
+async def test_success_echoes_mock_json_answer_as_structured_output() -> None:
+    provider = ProfiledMockProvider(
+        {"profile-a": SimulatedModelProfile(default_success_probability=1.0)}
+    )
+    request = InferenceRequest(
+        provider="sim",
+        model="profile-a",
+        messages=[Message(role=Role.USER, content="extract fields")],
+        metadata={"mock_json_answer": {"vendor": "Acme", "total": 42}},
+    )
+    response = await provider.complete(request)
+    assert response.succeeded
+    assert response.structured_output == {"vendor": "Acme", "total": 42}
+
+
+async def test_success_echoes_mock_tool_calls() -> None:
+    provider = ProfiledMockProvider(
+        {"profile-a": SimulatedModelProfile(default_success_probability=1.0)}
+    )
+    request = InferenceRequest(
+        provider="sim",
+        model="profile-a",
+        messages=[Message(role=Role.USER, content="look up order ORD-1")],
+        metadata={
+            "mock_tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "ORD-1"}}]
+        },
+    )
+    response = await provider.complete(request)
+    assert response.succeeded
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "order_lookup"
+    assert response.tool_calls[0].arguments == {"order_id": "ORD-1"}
+
+
 async def test_latency_varies_by_task_family() -> None:
     profile = SimulatedModelProfile(
         latency_ms_by_task_family={"slow_family": 5000.0}, default_latency_ms=100.0
