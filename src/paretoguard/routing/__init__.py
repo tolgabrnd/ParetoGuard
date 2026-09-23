@@ -11,6 +11,12 @@ from paretoguard.routing.dataset import (
     feature_matrix,
     labels,
 )
+from paretoguard.routing.escalation import (
+    EscalationPolicy,
+    EscalationRecord,
+    EscalationRouter,
+    NoConfidentRouteError,
+)
 from paretoguard.routing.evaluation import (
     RoutingEvalSummary,
     best_fixed_model,
@@ -69,9 +75,13 @@ __all__ = [
     "LABEL_COLUMNS",
     "CalibrationMetrics",
     "CandidateProfile",
+    "EscalationPolicy",
+    "EscalationRecord",
+    "EscalationRouter",
     "HealthStatus",
     "LearnedRouter",
     "LearnedRouterModel",
+    "NoConfidentRouteError",
     "NoEligibleCandidateError",
     "ObjectiveVector",
     "ParetoObjective",
