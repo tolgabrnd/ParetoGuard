@@ -1,5 +1,6 @@
 """Evaluation suites, deterministic graders, and the benchmark runner."""
 
+from paretoguard.evals.matrix import MatrixConfig, MatrixRow, MatrixRunner, MatrixRunResult
 from paretoguard.evals.metrics import MetricsSummary, compute_metrics, pass_at_k
 from paretoguard.evals.models import (
     EvalCase,
@@ -23,6 +24,10 @@ __all__ = [
     "GraderConfig",
     "GraderKind",
     "GroundTruth",
+    "MatrixConfig",
+    "MatrixRow",
+    "MatrixRunResult",
+    "MatrixRunner",
     "MetricsSummary",
     "compute_metrics",
     "pass_at_k",

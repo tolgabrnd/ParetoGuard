@@ -7,9 +7,9 @@ separate and optional rather than another interchangeable GraderKind.
 """
 
 from paretoguard.evals.graders import numeric, retrieval, structured, text, tool_use
-from paretoguard.evals.graders.base import GradeOutcome, GraderFn, get_grader
+from paretoguard.evals.graders.base import GradeOutcome, GraderFn, get_grader, grade_case
 
-__all__ = ["GradeOutcome", "GraderFn", "get_grader"]
+__all__ = ["GradeOutcome", "GraderFn", "get_grader", "grade_case"]
 
 # Referenced only to guarantee their @register(...) decorators execute on import;
 # unused-import warnings for these are expected and intentional.

@@ -14,7 +14,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from paretoguard.core.models import InferenceResponse
-from paretoguard.evals.models import GraderConfig, GraderKind, GroundTruth
+from paretoguard.evals.models import EvalCase, GraderConfig, GraderKind, GroundTruth
 
 
 class GradeOutcome(BaseModel):
@@ -57,3 +57,16 @@ def get_grader(kind: GraderKind) -> GraderFn:
         return _REGISTRY[kind]
     except KeyError:
         raise ValueError(f"no grader registered for {kind!r}") from None
+
+
+def grade_case(case: EvalCase, response: InferenceResponse) -> GradeOutcome:
+    """Grades one (already-successful) response against its case, turning a
+    grader misconfiguration into a failing outcome rather than propagating
+    an exception. The single grading path shared by `BenchmarkRunner` and
+    `paretoguard.evals.matrix.MatrixRunner` so both score responses
+    identically."""
+    try:
+        grader = get_grader(case.grader.kind)
+        return grader(response, case.ground_truth, case.grader)
+    except Exception as exc:
+        return GradeOutcome(succeeded=False, score=0.0, explanation=f"grading error: {exc}")

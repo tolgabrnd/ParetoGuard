@@ -2,9 +2,14 @@
 grades each response, and (optionally) persists everything to an ExperimentStore.
 
 Built entirely on the existing `paretoguard.providers.Provider` and
-`paretoguard.runtime.Runtime` abstractions — no router exists yet (Phase D), so a
-run targets one fixed (provider, model) pair, matching the "assume no specific
-router" constraint on `evals` in docs/ARCHITECTURE.md.
+`paretoguard.runtime.Runtime` abstractions. A run always targets one fixed
+(provider, model) pair — this stays true even after `paretoguard.routing`
+exists, matching the "assume no specific router" constraint on `evals` in
+docs/ARCHITECTURE.md. Router-driven benchmarking
+(`paretoguard.evals.routed_runner.RoutedBenchmarkRunner`) and offline
+multi-candidate matrix evaluation (`paretoguard.evals.matrix.MatrixRunner`)
+are separate, explicitly router-aware orchestrators that compose this
+module's pieces rather than modifying this one.
 """
 
 import asyncio
@@ -16,7 +21,7 @@ from uuid import uuid4
 from paretoguard import __version__
 from paretoguard.core.config import PricingTable
 from paretoguard.core.models import InferenceRequest, RunManifest, TraceEvent
-from paretoguard.evals.graders import GradeOutcome, get_grader
+from paretoguard.evals.graders import grade_case
 from paretoguard.evals.models import EvalCase, EvalResult, EvalSuite
 from paretoguard.providers.base import Provider
 from paretoguard.runtime import BudgetGuard, RetryPolicy, Runtime
@@ -174,11 +179,7 @@ class BenchmarkRunner:
                 total_tokens=response.token_usage.total_tokens,
             )
 
-        try:
-            grader = get_grader(case.grader.kind)
-            outcome = grader(response, case.ground_truth, case.grader)
-        except Exception as exc:
-            outcome = GradeOutcome(succeeded=False, score=0.0, explanation=f"grading error: {exc}")
+        outcome = grade_case(case, response)
 
         return EvalResult(
             case_id=case.case_id,

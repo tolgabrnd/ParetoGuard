@@ -94,6 +94,7 @@ def build_suite(seed: int = 42, num_cases: int = 20) -> EvalSuite:
                 metadata={
                     "mock_scenario": "success",
                     "mock_tool_calls": [{"name": expected.name, "arguments": expected.arguments}],
+                    "template_id": f"{NAME}:{expected.name}",
                 },
             )
         )

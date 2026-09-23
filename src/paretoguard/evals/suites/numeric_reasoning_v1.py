@@ -26,7 +26,7 @@ def _distractor(rng: random.Random) -> str:
     return f"{name}'s favorite color is {color}, which has no bearing on this problem."
 
 
-def _generate_case(rng: random.Random) -> tuple[str, float]:
+def _generate_case(rng: random.Random) -> tuple[str, float, str]:
     a = rng.randint(2, 20)
     b = rng.randint(2, 20)
     c = rng.randint(2, 10)
@@ -54,7 +54,7 @@ def _generate_case(rng: random.Random) -> tuple[str, float]:
         )
         answer = float((a - c) * b)
 
-    return prompt, answer
+    return prompt, answer, template
 
 
 def build_suite(seed: int = 42, num_cases: int = 20) -> EvalSuite:
@@ -62,17 +62,18 @@ def build_suite(seed: int = 42, num_cases: int = 20) -> EvalSuite:
     rng = random.Random(seed)
     cases = []
     for i in range(num_cases):
-        prompt, answer = _generate_case(rng)
+        prompt, answer, template = _generate_case(rng)
         cases.append(
             EvalCase(
                 case_id=f"{NAME}-{i:03d}",
                 messages=[Message(role=Role.USER, content=prompt)],
                 grader=GraderConfig(kind=GraderKind.NUMERIC, tolerance=1e-6),
                 ground_truth=GroundTruth(number=answer),
-                tags=["numeric_reasoning", "multi_step"],
+                tags=["numeric_reasoning", "multi_step", template],
                 metadata={
                     "mock_scenario": "success",
                     "mock_answer_text": f"Working through the steps, the final answer is {answer:g}.",
+                    "template_id": f"{NAME}:{template}",
                 },
             )
         )

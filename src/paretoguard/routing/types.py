@@ -2,63 +2,37 @@
 
 Kept separate from `paretoguard.core.models.routing` (which holds the
 *output* contract, `RoutingConstraints`/`RoutingDecision`, shared with
-storage) because these types are routing-implementation detail: how a
-request becomes features, how candidates are filtered, how measured
-history is looked up. `evals` never imports this module (see
-docs/ARCHITECTURE.md: "evals ... Must not assume a specific router").
+storage) because these types are routing-implementation detail: how
+candidates are filtered, how measured history is looked up. Feature
+extraction itself (`TaskFeatures`/`extract_task_features`) lives in
+`paretoguard.core.features`, not here — both `routing` and `evals` depend on
+it, so it can't live in either without the other depending on it too (see
+docs/ARCHITECTURE.md: "evals ... Must not assume a specific router"). This
+module re-exports it for convenience so existing `from
+paretoguard.routing.types import ...` / `from paretoguard.routing import
+...` call sites don't need to know about the split.
 """
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from paretoguard.core.features import (
+    TASK_FAMILY_METADATA_KEY as TASK_FAMILY_METADATA_KEY,
+)
+from paretoguard.core.features import (
+    TaskFeatures as TaskFeatures,
+)
+from paretoguard.core.features import (
+    extract_task_features as extract_task_features,
+)
 from paretoguard.core.models import InferenceRequest, ModelSpec, RoutingConstraints
 from paretoguard.telemetry.health import ModelHealth
-
-TASK_FAMILY_METADATA_KEY = "task_family"
-"""InferenceRequest.metadata key a caller may set to identify the task family
-(e.g. suite name) a request belongs to, for task-family-scoped rules/profiles.
-Optional: absent unless a caller (typically an EvalCase's metadata, which is
-passed through verbatim to InferenceRequest.metadata) sets it."""
 
 
 def candidate_key(provider: str, model: str) -> str:
     """Canonical lookup key for a (provider, model) pair, used to key both
     `RoutingRequest.health` and `RoutingRequest.profiles`."""
     return f"{provider}:{model}"
-
-
-@dataclass(frozen=True)
-class TaskFeatures:
-    """Cheap, deterministic features extracted from an `InferenceRequest` at
-    routing time — never anything only known after execution (see the
-    leakage rules in `paretoguard.routing` for the learned router, Commit 21).
-    """
-
-    input_tokens_estimate: int
-    max_output_tokens: int | None
-    context_tokens_estimate: int
-    requires_structured_output: bool
-    requires_tool_use: bool
-    tool_count: int
-    task_family: str | None
-
-
-def extract_task_features(request: InferenceRequest) -> TaskFeatures:
-    """Whitespace-split word count as a token estimate — the same cheap,
-    dependency-free heuristic `MockProvider` uses for its own token counts
-    (see `paretoguard.providers.mock`), good enough for *routing-time*
-    eligibility decisions, not for billing."""
-    input_tokens_estimate = max(1, sum(len(m.content.split()) for m in request.messages))
-    max_output = request.max_output_tokens
-    return TaskFeatures(
-        input_tokens_estimate=input_tokens_estimate,
-        max_output_tokens=max_output,
-        context_tokens_estimate=input_tokens_estimate + (max_output or 0),
-        requires_structured_output=request.structured_output_schema is not None,
-        requires_tool_use=len(request.tools) > 0,
-        tool_count=len(request.tools),
-        task_family=request.metadata.get(TASK_FAMILY_METADATA_KEY),
-    )
 
 
 @dataclass(frozen=True)

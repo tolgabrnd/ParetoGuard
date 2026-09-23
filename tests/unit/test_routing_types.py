@@ -1,5 +1,7 @@
 """Unit tests for shared routing types: feature extraction and eligibility filtering."""
 
+import pytest
+
 from paretoguard.core.models import (
     InferenceRequest,
     Message,
@@ -80,6 +82,58 @@ def test_extract_task_features_task_family_defaults_to_none() -> None:
 def test_extract_task_features_context_estimate_includes_max_output() -> None:
     features = extract_task_features(_request(max_output_tokens=100))
     assert features.context_tokens_estimate == features.input_tokens_estimate + 100
+
+
+def test_extract_task_features_expected_output_length_mirrors_max_output_tokens() -> None:
+    features = extract_task_features(_request(max_output_tokens=250))
+    assert features.expected_output_length == 250
+
+
+def test_extract_task_features_expected_step_count_is_none_by_default() -> None:
+    features = extract_task_features(_request())
+    assert features.expected_step_count is None
+
+
+def test_extract_task_features_numeric_density() -> None:
+    request = _request(
+        messages=[Message(role=Role.USER, content="the total is 42 out of 100 items")]
+    )
+    features = extract_task_features(request)
+    assert features.numeric_density == pytest.approx(2 / 8)
+
+
+def test_extract_task_features_numeric_density_zero_for_no_numbers() -> None:
+    features = extract_task_features(_request())
+    assert features.numeric_density == 0.0
+
+
+def test_extract_task_features_schema_complexity_zero_without_schema() -> None:
+    features = extract_task_features(_request())
+    assert features.schema_complexity == 0
+
+
+def test_extract_task_features_schema_complexity_counts_properties() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "address": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}, "zip": {"type": "string"}},
+            },
+        },
+    }
+    features = extract_task_features(_request(structured_output_schema=schema))
+    # top-level: name, address (2) + nested address.properties: city, zip (2)
+    assert features.schema_complexity == 4
+
+
+def test_task_features_as_feature_dict_includes_every_field() -> None:
+    features = extract_task_features(_request())
+    feature_dict = features.as_feature_dict()
+    assert feature_dict["input_tokens_estimate"] == features.input_tokens_estimate
+    assert feature_dict["task_family"] is None
+    assert "expected_step_count" in feature_dict
 
 
 def test_filter_eligible_excludes_model_with_too_small_context_window() -> None:
