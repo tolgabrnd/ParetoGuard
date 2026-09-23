@@ -94,7 +94,7 @@ warn_unused_ignores = true
 warn_return_any = true
 
 [[tool.mypy.overrides]]
-module = ["duckdb.*", "sklearn.*"]
+module = ["duckdb.*", "sklearn.*", "torch.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

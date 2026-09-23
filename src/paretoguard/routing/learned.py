@@ -17,7 +17,7 @@ no DataFrame-with-named-columns dependency needed for that step.
 """
 
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 import numpy as np
 import polars as pl
@@ -30,40 +30,25 @@ from sklearn.metrics import brier_score_loss
 from paretoguard.core.features import TaskFeatures
 from paretoguard.core.models import RoutingDecision
 from paretoguard.routing.dataset import CANDIDATE_COLUMNS, FEATURE_COLUMNS
+from paretoguard.routing.encoding import categorical_row, design_row, numeric_row
 from paretoguard.routing.pareto_router import ParetoObjective, ParetoRouter
 from paretoguard.routing.protocol import Router
 from paretoguard.routing.types import CandidateProfile, RoutingRequest, candidate_key
 
 ModelKind = Literal["logistic_regression", "random_forest"]
 
-_NUMERIC_FEATURE_COLUMNS: tuple[str, ...] = (
-    "input_tokens_estimate",
-    "max_output_tokens",
-    "context_tokens_estimate",
-    "requires_structured_output",
-    "requires_tool_use",
-    "tool_count",
-    "schema_complexity",
-    "numeric_density",
-    "expected_output_length",
-    "expected_step_count",
-)
-_CATEGORICAL_COLUMNS: tuple[str, ...] = ("task_family", "provider", "model")
-_UNKNOWN_CATEGORY = "__unknown__"
 
+class SuccessPredictor(Protocol):
+    """Structural interface `LearnedRouter` needs from a fitted model —
+    satisfied by both `LearnedRouterModel` (scikit-learn) and
+    `paretoguard.routing.torch_router.TorchRouterModel` (optional PyTorch),
+    so `LearnedRouter` can drive either backend without depending on torch.
+    """
 
-def _numeric_row(record: dict[str, Any]) -> list[float]:
-    return [
-        float(record[col]) if record.get(col) is not None else 0.0
-        for col in _NUMERIC_FEATURE_COLUMNS
-    ]
+    model_kind: str
+    calibrated: bool
 
-
-def _categorical_row(record: dict[str, Any]) -> list[str]:
-    return [
-        str(record[col]) if record.get(col) is not None else _UNKNOWN_CATEGORY
-        for col in _CATEGORICAL_COLUMNS
-    ]
+    def predict_proba(self, features: TaskFeatures, provider: str, model: str) -> float: ...
 
 
 @dataclass
@@ -76,15 +61,10 @@ class LearnedRouterModel:
     model_kind: ModelKind
     calibrated: bool
 
-    def _design_row(self, record: dict[str, Any]) -> np.ndarray[Any, Any]:
-        numeric = np.array(_numeric_row(record), dtype=float)
-        categorical = self.encoder.transform([_categorical_row(record)]).toarray()[0]
-        return np.concatenate([numeric, categorical])
-
     def predict_proba_record(self, record: dict[str, Any]) -> float:
         """Predicts P(success) from a flat record with `FEATURE_COLUMNS` +
         `CANDIDATE_COLUMNS` keys — the same shape `build_dataset` produces."""
-        row = self._design_row(record).reshape(1, -1)
+        row = design_row(record, self.encoder).reshape(1, -1)
         return float(self.classifier.predict_proba(row)[0, 1])
 
     def predict_proba(self, features: TaskFeatures, provider: str, model: str) -> float:
@@ -114,10 +94,10 @@ def train_learned_router_model(
     y = train_df["succeeded"].to_numpy().astype(int)
 
     encoder = OneHotEncoder(handle_unknown="ignore")
-    categorical_rows = [_categorical_row(r) for r in records]
+    categorical_rows = [categorical_row(r) for r in records]
     encoder.fit(categorical_rows)
 
-    numeric = np.array([_numeric_row(r) for r in records], dtype=float)
+    numeric = np.array([numeric_row(r) for r in records], dtype=float)
     categorical = encoder.transform(categorical_rows).toarray()
     X = np.hstack([numeric, categorical])
 
@@ -198,7 +178,7 @@ class LearnedRouter(Router):
 
     def __init__(
         self,
-        model: LearnedRouterModel,
+        model: SuccessPredictor,
         *,
         objective: ParetoObjective = ParetoObjective.MAXIMIZE_SUCCESS,
     ) -> None:
