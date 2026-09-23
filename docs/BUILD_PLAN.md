@@ -17,7 +17,7 @@ phases; each phase stops for review before the next begins.
 |-------|---------|-------|--------|
 | A | 01-05 | Toolchain, docs, contributor workflow, domain models, storage | Done |
 | B | 06-11 | Provider protocol, MockProvider, runtime, OpenAI/Anthropic/Gemini adapters, telemetry | Done |
-| C | 12-17 | Eval schema, graders, benchmark runner, extraction/numeric/context/tool-use suites, consistency metrics | Not started |
+| C | 12-17 | Eval schema, graders, benchmark runner, extraction/numeric/context/tool-use suites, consistency metrics | Done |
 | D | 18-24 | Static/rule/Pareto/reliability routers, learned routing (dataset, calibrated model, optional Torch), confidence/abstention | Not started |
 | E | 25-29 | Agent simulator, chaos fault injection, recovery policies (retry/fallback/circuit-breaker/escalation), resilience suites | Not started |
 | F | 30-32 | Statistics (CIs, comparisons), regression detection, report generation | Not started |
