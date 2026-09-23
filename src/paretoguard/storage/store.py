@@ -8,13 +8,14 @@ recompute metrics from live provider calls.
 import json
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import duckdb
 import polars as pl
 
 from paretoguard.core.models import (
+    FailureCategory,
     InferenceRequest,
     InferenceResponse,
     Message,
@@ -24,6 +25,13 @@ from paretoguard.core.models import (
     TraceEvent,
 )
 from paretoguard.storage.schema import KNOWN_TABLES, apply_pending_migrations
+
+if TYPE_CHECKING:
+    # Deferred: paretoguard.evals imports paretoguard.storage at runtime (the
+    # benchmark runner persists results), so a module-level import here would
+    # be circular. Only type checkers need this; runtime code imports EvalResult
+    # locally inside get_eval_results, where the actual class is needed.
+    from paretoguard.evals.models import EvalResult
 
 
 def _dumps(value: Any) -> str | None:
@@ -179,6 +187,31 @@ class ExperimentStore:
             ],
         )
 
+    def record_eval_result(self, result: "EvalResult", run_id: str | None = None) -> None:
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO eval_results VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                str(result.result_id),
+                run_id,
+                result.case_id,
+                str(result.request_id),
+                result.repetition,
+                result.sequence,
+                result.succeeded,
+                result.score,
+                result.grader_kind.value,
+                result.explanation,
+                _dumps(result.details),
+                result.response_error_category.value if result.response_error_category else None,
+                result.latency_ms,
+                result.cost_usd,
+                result.total_tokens,
+            ],
+        )
+
     # -- reads ------------------------------------------------------------
 
     def get_run(self, run_id: str) -> RunManifest | None:
@@ -249,6 +282,49 @@ class ExperimentStore:
         if run_id is None:
             return self._conn.execute("SELECT * FROM routing_decisions").pl()
         return self._conn.execute("SELECT * FROM routing_decisions WHERE run_id = ?", [run_id]).pl()
+
+    def eval_results_df(self, run_id: str | None = None) -> pl.DataFrame:
+        if run_id is None:
+            return self._conn.execute("SELECT * FROM eval_results ORDER BY sequence").pl()
+        return self._conn.execute(
+            "SELECT * FROM eval_results WHERE run_id = ? ORDER BY sequence", [run_id]
+        ).pl()
+
+    def get_eval_results(self, run_id: str) -> list["EvalResult"]:
+        """Reads back EvalResults for a run in canonical (case, repetition) order,
+        via the `sequence` field — independent of any storage read-back order,
+        which plain SQL does not otherwise guarantee."""
+        from paretoguard.evals.models import (  # local: see TYPE_CHECKING note above
+            EvalResult,
+            GraderKind,
+        )
+
+        df = self.eval_results_df(run_id=run_id)
+        results = []
+        for row in df.iter_rows(named=True):
+            results.append(
+                EvalResult(
+                    result_id=UUID(row["result_id"]),
+                    case_id=row["case_id"],
+                    request_id=UUID(row["request_id"]),
+                    repetition=row["repetition"],
+                    sequence=row["sequence"],
+                    succeeded=row["succeeded"],
+                    score=row["score"],
+                    grader_kind=GraderKind(row["grader_kind"]),
+                    explanation=row["explanation"],
+                    details=_loads(row["details"], {}),
+                    response_error_category=(
+                        FailureCategory(row["response_error_category"])
+                        if row["response_error_category"]
+                        else None
+                    ),
+                    latency_ms=row["latency_ms"],
+                    cost_usd=row["cost_usd"],
+                    total_tokens=row["total_tokens"],
+                )
+            )
+        return results
 
     # -- export -------------------------------------------------------------
 

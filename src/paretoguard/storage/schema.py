@@ -12,7 +12,9 @@ import duckdb
 
 SCHEMA_VERSION_TABLE = "_paretoguard_schema_version"
 
-KNOWN_TABLES = frozenset({"runs", "requests", "responses", "trace_events", "routing_decisions"})
+KNOWN_TABLES = frozenset(
+    {"runs", "requests", "responses", "trace_events", "routing_decisions", "eval_results"}
+)
 
 
 def _migration_001_initial(conn: duckdb.DuckDBPyConnection) -> None:
@@ -114,6 +116,30 @@ def _migration_001_initial(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _migration_002_eval_results(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE eval_results (
+            result_id VARCHAR PRIMARY KEY,
+            run_id VARCHAR,
+            case_id VARCHAR,
+            request_id VARCHAR,
+            repetition INTEGER,
+            sequence INTEGER,
+            succeeded BOOLEAN,
+            score DOUBLE,
+            grader_kind VARCHAR,
+            explanation VARCHAR,
+            details VARCHAR,
+            response_error_category VARCHAR,
+            latency_ms DOUBLE,
+            cost_usd DOUBLE,
+            total_tokens INTEGER
+        )
+        """
+    )
+
+
 # (version, description, apply). Append new entries here for future schema changes;
 # never edit an already-released migration in place.
 MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] = [
@@ -122,6 +148,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] =
         "initial schema: runs, requests, responses, trace_events, routing_decisions",
         _migration_001_initial,
     ),
+    (2, "add eval_results table", _migration_002_eval_results),
 ]
 
 

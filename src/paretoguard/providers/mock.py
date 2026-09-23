@@ -16,6 +16,7 @@ from typing import Any
 from uuid import UUID
 
 from paretoguard.core.models import (
+    CostRecord,
     ErrorInfo,
     FailureCategory,
     FinishReason,
@@ -103,6 +104,7 @@ class MockProvider(Provider):
             finish_reason=outcome.finish_reason,
             tool_calls=outcome.tool_calls,
             token_usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+            cost=CostRecord(input_cost_usd=0.0, output_cost_usd=0.0, pricing_version="mock"),
             latency=LatencyRecord(total_latency_ms=elapsed_ms),
         )
 
@@ -110,6 +112,15 @@ class MockProvider(Provider):
         self, scenario: MockScenario, request: InferenceRequest, input_text: str
     ) -> _Outcome:
         if scenario == MockScenario.SUCCESS:
+            tool_calls_meta = request.metadata.get("mock_tool_calls")
+            if tool_calls_meta:
+                tool_calls = [
+                    ToolCall(
+                        id=f"mock-call-{i}", name=tc["name"], arguments=tc.get("arguments", {})
+                    )
+                    for i, tc in enumerate(tool_calls_meta)
+                ]
+                return _Outcome(tool_calls=tool_calls, finish_reason=FinishReason.TOOL_CALLS)
             text = request.metadata.get("mock_answer_text", f"mock response to: {input_text[:50]}")
             return _Outcome(output_text=text)
 

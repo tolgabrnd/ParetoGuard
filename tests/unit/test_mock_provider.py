@@ -30,6 +30,28 @@ async def test_success_scenario_is_the_default() -> None:
     assert response.token_usage.output_tokens > 0
 
 
+async def test_success_scenario_reports_zero_cost() -> None:
+    provider = MockProvider()
+    response = await provider.complete(_request())
+    assert response.cost is not None
+    assert response.cost.total_cost_usd == 0.0
+    assert response.cost.pricing_version == "mock"
+
+
+async def test_success_scenario_with_mock_tool_calls_metadata() -> None:
+    provider = MockProvider()
+    response = await provider.complete(
+        _request(
+            MockScenario.SUCCESS,
+            mock_tool_calls=[{"name": "calculator", "arguments": {"expression": "2+2"}}],
+        )
+    )
+    assert response.finish_reason == FinishReason.TOOL_CALLS
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "calculator"
+    assert response.tool_calls[0].arguments == {"expression": "2+2"}
+
+
 async def test_success_scenario_respects_custom_answer_text() -> None:
     provider = MockProvider()
     response = await provider.complete(

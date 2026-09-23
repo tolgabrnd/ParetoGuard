@@ -20,6 +20,7 @@ from paretoguard.core.models import (
     TraceEventType,
 )
 from paretoguard.core.models.inference import InferenceResponse
+from paretoguard.evals.models import EvalResult, GraderKind
 from paretoguard.storage import ExperimentStore
 
 
@@ -163,6 +164,60 @@ def test_record_routing_decision(store: ExperimentStore) -> None:
     df = store.routing_decisions_df(run_id="run-1")
     assert df.height == 1
     assert df["selected_model"][0] == "mock-cheap"
+
+
+def test_record_and_get_eval_results_roundtrip_in_sequence_order(store: ExperimentStore) -> None:
+    request_id = uuid4()
+    result_a = EvalResult(
+        case_id="case-1",
+        request_id=request_id,
+        repetition=0,
+        sequence=1,
+        succeeded=True,
+        score=1.0,
+        grader_kind=GraderKind.EXACT_MATCH,
+        explanation="ok",
+        latency_ms=5.0,
+        total_tokens=3,
+    )
+    result_b = result_a.model_copy(
+        update={
+            "result_id": uuid4(),
+            "sequence": 0,
+            "case_id": "case-0",
+            "score": 0.5,
+            "succeeded": False,
+        }
+    )
+    # Recorded out of sequence order to prove read-back sorts by `sequence`, not
+    # insertion order (which plain SQL does not otherwise guarantee).
+    store.record_eval_result(result_a, run_id="run-1")
+    store.record_eval_result(result_b, run_id="run-1")
+
+    fetched = store.get_eval_results("run-1")
+    assert [r.sequence for r in fetched] == [0, 1]
+    assert fetched[0].case_id == "case-0"
+    assert fetched[0].succeeded is False
+    assert fetched[1].case_id == "case-1"
+
+
+def test_eval_results_df_filters_by_run_id(store: ExperimentStore) -> None:
+    r1 = EvalResult(
+        case_id="c1",
+        request_id=uuid4(),
+        repetition=0,
+        sequence=0,
+        succeeded=True,
+        score=1.0,
+        grader_kind=GraderKind.NUMERIC,
+        explanation="ok",
+        latency_ms=1.0,
+        total_tokens=1,
+    )
+    store.record_eval_result(r1, run_id="run-1")
+    store.record_eval_result(r1.model_copy(update={"result_id": uuid4()}), run_id="run-2")
+    df = store.eval_results_df(run_id="run-1")
+    assert df.height == 1
 
 
 def test_export_parquet_and_jsonl(store: ExperimentStore, tmp_path: Path) -> None:
