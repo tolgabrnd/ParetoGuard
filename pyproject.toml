@@ -29,6 +29,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.31",
     "pyyaml>=6.0",
+    "jsonschema>=4.23",
     "tzdata>=2024.2; sys_platform == 'win32'",
 ]
 
@@ -52,6 +53,7 @@ dev = [
     "mypy>=1.12",
     "pre-commit>=3.8",
     "types-pyyaml>=6.0",
+    "types-jsonschema>=4.23",
 ]
 
 [build-system]
