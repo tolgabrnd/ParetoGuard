@@ -7,6 +7,7 @@ from paretoguard.core.models import Message, ModelSpec, Role
 from paretoguard.evals.matrix import MatrixConfig, MatrixRunner
 from paretoguard.evals.models import EvalCase, EvalSuite, GraderConfig, GraderKind, GroundTruth
 from paretoguard.providers.mock import SCENARIO_METADATA_KEY, MockProvider, MockScenario
+from paretoguard.storage import ExperimentStore
 
 
 def _suite() -> EvalSuite:
@@ -104,3 +105,26 @@ async def test_matrix_run_result_manifest_labels_it_as_matrix() -> None:
     result = await runner.run(_suite())
     assert result.manifest.router_name == "__matrix__"
     assert result.manifest.suite_name == "matrix-test"
+
+
+async def test_matrix_runner_persists_through_the_normal_experiment_pipeline() -> None:
+    with ExperimentStore(":memory:") as store:
+        runner = MatrixRunner(_candidates(), {"mock": MockProvider()}, store=store)
+        result = await runner.run(_suite())
+
+        manifest = store.get_run(result.run_id)
+        assert manifest is not None
+        assert manifest.router_name == "__matrix__"
+
+        eval_results = store.get_eval_results(result.run_id)
+        assert len(eval_results) == len(result.rows) == 4  # 2 cases x 2 candidates
+
+        requests_df = store.requests_df(run_id=result.run_id)
+        responses_df = store.responses_df(run_id=result.run_id)
+        assert requests_df.height == 4
+        assert responses_df.height == 4
+
+        # case_id embeds the candidate since (task_id, repetition) alone is
+        # no longer unique across a matrix's multiple candidates per task.
+        case_ids = {r.case_id for r in eval_results}
+        assert case_ids == {"case-1::mock-a", "case-1::mock-b", "case-2::mock-a", "case-2::mock-b"}
