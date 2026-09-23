@@ -95,7 +95,11 @@ def build_dataset(
         }
         for row, split in zip(rows, splits, strict=True)
     ]
-    return pl.DataFrame(records)
+    # infer_schema_length=None scans every row rather than a sample: several
+    # columns (template_id, cost_usd, response_error_category, ...) are None
+    # for most rows in a typical dataset, and a short sample can miss the
+    # rows that reveal a column's real (str/float) type.
+    return pl.DataFrame(records, infer_schema_length=None)
 
 
 def feature_matrix(df: pl.DataFrame, *, split: str | None = None) -> pl.DataFrame:

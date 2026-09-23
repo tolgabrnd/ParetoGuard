@@ -1,0 +1,4 @@
+router,task_success_rate,reroute_count,reroute_frequency,time_to_detect_degradation,time_to_recover,unnecessary_reroute_count,unnecessary_reroute_rate,mean_cost_usd,mean_latency_ms,label
+static,0.89,0,0.0,,,0,,0.01,100.0,SIMULATION
+pareto,0.9633333333333334,5,0.016666666666666666,7,,1,0.2,0.01,100.0,SIMULATION
+reliability,0.9733333333333334,22,0.07333333333333333,7,70,5,0.22727272727272727,0.01,100.0,SIMULATION

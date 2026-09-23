@@ -1,0 +1,10 @@
+router,model,count
+rule,profile-a,11
+pareto,profile-a,11
+reliability,profile-a,11
+learned_logistic_regression,profile-a,11
+learned_random_forest,profile-a,9
+learned_random_forest,profile-b,1
+learned_random_forest,profile-c,1
+learned_torch_mlp,profile-a,10
+learned_torch_mlp,profile-c,1

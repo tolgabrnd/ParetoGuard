@@ -110,3 +110,32 @@ def test_labels_returns_succeeded_by_default() -> None:
     df = build_dataset(_rows(10))
     y = labels(df)
     assert y.to_list() == df["succeeded"].to_list()
+
+
+def test_build_dataset_handles_template_id_appearing_only_after_many_none_rows() -> None:
+    """Regression test: polars' default schema inference only samples the
+    first N rows, and template_id/cost_usd/response_error_category are
+    typically None for most rows — a naive DataFrame construction can infer
+    Null-typed columns from an all-None sample and then fail once it hits a
+    real string value later on."""
+    rows = _rows(150)  # template_id=None for all of these
+    rows.append(
+        MatrixRow(
+            task_id="templated-task",
+            repetition=0,
+            provider="mock",
+            model="mock-a",
+            task_features=_features(),
+            succeeded=True,
+            score=1.0,
+            cost_usd=0.001,
+            latency_ms=100.0,
+            total_tokens=20,
+            response_error_category=None,
+            template_id="numeric_reasoning_v1:add_multiply",
+        )
+    )
+    df = build_dataset(rows)
+    assert df.filter(df["task_id"] == "templated-task")["template_id"].to_list() == [
+        "numeric_reasoning_v1:add_multiply"
+    ]
