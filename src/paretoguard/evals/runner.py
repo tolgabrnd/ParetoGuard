@@ -6,7 +6,7 @@ Built entirely on the existing `paretoguard.providers.Provider` and
 (provider, model) pair — this stays true even after `paretoguard.routing`
 exists, matching the "assume no specific router" constraint on `evals` in
 docs/ARCHITECTURE.md. Router-driven benchmarking
-(`paretoguard.evals.routed_runner.RoutedBenchmarkRunner`) and offline
+(`paretoguard.routing.execution.RoutedBenchmarkRunner`) and offline
 multi-candidate matrix evaluation (`paretoguard.evals.matrix.MatrixRunner`)
 are separate, explicitly router-aware orchestrators that compose this
 module's pieces rather than modifying this one.

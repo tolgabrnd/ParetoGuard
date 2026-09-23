@@ -49,6 +49,8 @@ flowchart TD
 | `runtime` | Concurrency, timeout, retry, budget | Know about specific providers |
 | `routing` | Select a model given constraints/health | Call providers directly |
 | `evals` | Task schemas, grading, benchmark orchestration | Assume a specific router |
+| `evals.matrix` | Offline: every candidate x every task, for learned-router training data | Assume a specific router (candidates are given, not chosen) |
+| `routing.execution` | **The one exception**: dispatches a `Router`'s `RoutingDecision` to the selected provider via `Runtime` | — (every other file in `routing` still must not call providers; only this one composes `routing` + `evals` + `runtime` for live router-driven benchmarking) |
 | `agents` | Tool-use loop, deterministic tools | Execute arbitrary code or shell |
 | `chaos` | Deterministic fault injection | Run unconditionally outside experiments |
 | `recovery` | Retry/fallback/circuit-breaker/escalation policy | Hide failures silently |
