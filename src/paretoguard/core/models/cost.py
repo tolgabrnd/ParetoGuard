@@ -5,8 +5,23 @@ routing or cost-calculation logic — providers change prices over time.
 """
 
 from datetime import date
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
+
+
+class CostBasis(StrEnum):
+    """How a `CostRecord` was derived, so a number is never mistaken for another.
+
+    ESTIMATED: computed from a real provider's published pricing (a versioned
+    `PricingEntry` with real, dated figures) applied to actual/reported token
+    usage. Still an estimate, not a provider-issued invoice.
+    SIMULATED: computed from a synthetic/offline model profile's invented price
+    point (e.g. a MockProvider profile). Never to be presented as a real cost.
+    """
+
+    ESTIMATED = "estimated"
+    SIMULATED = "simulated"
 
 
 class TokenUsage(BaseModel):
@@ -22,11 +37,16 @@ class TokenUsage(BaseModel):
 
 
 class CostRecord(BaseModel):
-    """Estimated cost of one inference call, computed from a specific pricing version."""
+    """Cost of one inference call, computed from a specific pricing version.
+
+    Always carries `basis` so a simulated/offline number can never be silently
+    read as a real provider cost (see `CostBasis`).
+    """
 
     input_cost_usd: float = Field(ge=0)
     output_cost_usd: float = Field(ge=0)
     pricing_version: str
+    basis: CostBasis
     currency: str = "USD"
 
     @property
@@ -56,3 +76,10 @@ class PricingEntry(BaseModel):
     output_price_per_million_usd: float = Field(ge=0)
     version: str
     effective_date: date
+    basis: CostBasis = Field(
+        default=CostBasis.ESTIMATED,
+        description=(
+            "ESTIMATED for real-provider prices copied from a pricing page; "
+            "SIMULATED for synthetic/offline model profiles with invented prices."
+        ),
+    )

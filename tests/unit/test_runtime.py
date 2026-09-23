@@ -2,10 +2,13 @@
 
 import asyncio
 import random
+from datetime import date
 
 import pytest
 
+from paretoguard.core.config import PricingTable
 from paretoguard.core.models import (
+    CostBasis,
     ErrorInfo,
     FailureCategory,
     FinishReason,
@@ -13,6 +16,7 @@ from paretoguard.core.models import (
     InferenceResponse,
     LatencyRecord,
     Message,
+    PricingEntry,
     Role,
     TokenUsage,
     TraceEventType,
@@ -220,3 +224,57 @@ async def test_budget_guard_rejects_negative_limits() -> None:
         BudgetGuard(max_run_usd=-1)
     with pytest.raises(ValueError):
         BudgetGuard(max_calls=-1)
+
+
+def _pricing_table(basis: CostBasis = CostBasis.SIMULATED) -> PricingTable:
+    return PricingTable(
+        entries=[
+            PricingEntry(
+                provider="mock",
+                model="mock-strong",
+                input_price_per_million_usd=1_000_000.0,
+                output_price_per_million_usd=2_000_000.0,
+                version="test-v1",
+                effective_date=date(2026, 1, 1),
+                basis=basis,
+            )
+        ]
+    )
+
+
+async def test_runtime_estimates_cost_from_pricing_table() -> None:
+    runtime = Runtime(MockProvider(), pricing_table=_pricing_table())
+    response = await runtime.run(_request())
+    assert response.succeeded
+    assert response.cost is not None
+    assert response.cost.basis == CostBasis.SIMULATED
+    assert response.cost.pricing_version == "test-v1"
+    # 1 input token * $1/token + N output tokens * $2/token, from the priced-at-
+    # $1M-per-million rates above (chosen to make the per-token cost easy to
+    # check without a fragile exact-float assertion on tokenization details).
+    assert response.cost.input_cost_usd == pytest.approx(1.0)
+    assert response.cost.output_cost_usd > 0.0
+
+
+async def test_runtime_leaves_cost_none_without_matching_pricing_entry() -> None:
+    runtime = Runtime(MockProvider(), pricing_table=PricingTable(entries=[]))
+    response = await runtime.run(_request())
+    assert response.succeeded
+    assert response.cost is None
+
+
+async def test_runtime_leaves_cost_none_without_a_pricing_table() -> None:
+    runtime = Runtime(MockProvider())
+    response = await runtime.run(_request())
+    assert response.succeeded
+    assert response.cost is None
+
+
+async def test_runtime_does_not_price_a_failed_response() -> None:
+    runtime = Runtime(
+        MockProvider(), pricing_table=_pricing_table(), retry_policy=_fast_retry_policy(1)
+    )
+    request = _request(**{SCENARIO_METADATA_KEY: MockScenario.SERVER_ERROR.value})
+    response = await runtime.run(request)
+    assert not response.succeeded
+    assert response.cost is None

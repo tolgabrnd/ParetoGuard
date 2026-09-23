@@ -16,7 +16,6 @@ from typing import Any
 from uuid import UUID
 
 from paretoguard.core.models import (
-    CostRecord,
     ErrorInfo,
     FailureCategory,
     FinishReason,
@@ -104,7 +103,6 @@ class MockProvider(Provider):
             finish_reason=outcome.finish_reason,
             tool_calls=outcome.tool_calls,
             token_usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
-            cost=CostRecord(input_cost_usd=0.0, output_cost_usd=0.0, pricing_version="mock"),
             latency=LatencyRecord(total_latency_ms=elapsed_ms),
         )
 

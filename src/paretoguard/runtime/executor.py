@@ -9,6 +9,7 @@ import asyncio
 import time
 from collections.abc import Callable
 
+from paretoguard.core.config import PricingTable
 from paretoguard.core.models import (
     ErrorInfo,
     FailureCategory,
@@ -22,6 +23,7 @@ from paretoguard.core.models import (
 )
 from paretoguard.providers.base import Provider
 from paretoguard.runtime.budget import BudgetExceededError, BudgetGuard
+from paretoguard.runtime.cost import estimate_cost
 from paretoguard.runtime.retry import RetryPolicy
 
 
@@ -55,6 +57,7 @@ class Runtime:
         *,
         retry_policy: RetryPolicy | None = None,
         budget_guard: BudgetGuard | None = None,
+        pricing_table: PricingTable | None = None,
         max_concurrency: int = 4,
         timeout_s: float = 60.0,
         on_trace_event: Callable[[TraceEvent], None] | None = None,
@@ -67,6 +70,7 @@ class Runtime:
         self._provider = provider
         self._retry_policy = retry_policy or RetryPolicy()
         self._budget_guard = budget_guard
+        self._pricing_table = pricing_table
         self._timeout_s = timeout_s
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._on_trace_event = on_trace_event
@@ -114,6 +118,7 @@ class Runtime:
                     )
 
             response = await self._attempt(request)
+            response = self._apply_pricing(response)
 
             if self._budget_guard is not None:
                 cost = response.cost.total_cost_usd if response.cost is not None else 0.0
@@ -158,6 +163,17 @@ class Runtime:
                 ),
                 elapsed_ms,
             )
+
+    def _apply_pricing(self, response: InferenceResponse) -> InferenceResponse:
+        """Fills in `response.cost` from `self._pricing_table` when the provider
+        didn't already report a real cost. Never guesses: if no pricing entry
+        exists for (provider, model), `cost` stays `None` (see `estimate_cost`)."""
+        if self._pricing_table is None or not response.succeeded or response.cost is not None:
+            return response
+        entry = self._pricing_table.price_for(response.provider, response.model)
+        if entry is None:
+            return response
+        return response.model_copy(update={"cost": estimate_cost(response.token_usage, entry)})
 
     @staticmethod
     def _is_retryable(response: InferenceResponse) -> bool:

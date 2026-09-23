@@ -140,6 +140,10 @@ def _migration_002_eval_results(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _migration_003_cost_basis(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute("ALTER TABLE responses ADD COLUMN cost_basis VARCHAR")
+
+
 # (version, description, apply). Append new entries here for future schema changes;
 # never edit an already-released migration in place.
 MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] = [
@@ -149,6 +153,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] =
         _migration_001_initial,
     ),
     (2, "add eval_results table", _migration_002_eval_results),
+    (3, "add cost_basis column to responses (ESTIMATED/SIMULATED)", _migration_003_cost_basis),
 ]
 
 

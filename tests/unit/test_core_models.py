@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from paretoguard.core.models import (
+    CostBasis,
     CostRecord,
     ErrorInfo,
     FailureCategory,
@@ -39,13 +40,23 @@ def test_token_usage_rejects_negative() -> None:
 
 
 def test_cost_record_total_cost() -> None:
-    cost = CostRecord(input_cost_usd=0.01, output_cost_usd=0.02, pricing_version="2026-09-22")
+    cost = CostRecord(
+        input_cost_usd=0.01,
+        output_cost_usd=0.02,
+        pricing_version="2026-09-22",
+        basis=CostBasis.ESTIMATED,
+    )
     assert cost.total_cost_usd == pytest.approx(0.03)
 
 
 def test_cost_record_rejects_negative() -> None:
     with pytest.raises(ValidationError):
-        CostRecord(input_cost_usd=-0.01, output_cost_usd=0.0, pricing_version="v1")
+        CostRecord(
+            input_cost_usd=-0.01,
+            output_cost_usd=0.0,
+            pricing_version="v1",
+            basis=CostBasis.ESTIMATED,
+        )
 
 
 def test_pricing_entry_requires_effective_date() -> None:

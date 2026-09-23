@@ -11,7 +11,13 @@ from paretoguard.core.models.common import (
     ProviderKind,
     Role,
 )
-from paretoguard.core.models.cost import CostRecord, LatencyRecord, PricingEntry, TokenUsage
+from paretoguard.core.models.cost import (
+    CostBasis,
+    CostRecord,
+    LatencyRecord,
+    PricingEntry,
+    TokenUsage,
+)
 from paretoguard.core.models.inference import (
     ErrorInfo,
     InferenceRequest,
@@ -26,6 +32,7 @@ from paretoguard.core.models.routing import RoutingConstraints, RoutingDecision
 from paretoguard.core.models.telemetry import TraceEvent, TraceEventType
 
 __all__ = [
+    "CostBasis",
     "CostRecord",
     "ErrorInfo",
     "FailureCategory",

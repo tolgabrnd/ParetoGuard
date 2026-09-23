@@ -120,10 +120,20 @@ class ExperimentStore:
             response.latency,
             response.error,
         )
+        # Named columns (rather than positional VALUES) because `cost_basis` was
+        # added to this table by a later ALTER TABLE migration and so is not in
+        # the same physical column position as the other cost fields it's
+        # logically grouped with here.
         self._conn.execute(
             """
-            INSERT OR REPLACE INTO responses VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO responses (
+                request_id, run_id, provider, model, output_text, structured_output,
+                finish_reason, tool_calls, input_tokens, output_tokens, cached_input_tokens,
+                input_cost_usd, output_cost_usd, pricing_version, cost_basis,
+                total_latency_ms, time_to_first_token_ms, queued_ms,
+                error_category, error_message, error_retryable,
+                raw_provider_metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 str(response.request_id),
@@ -140,6 +150,7 @@ class ExperimentStore:
                 cost.input_cost_usd if cost else None,
                 cost.output_cost_usd if cost else None,
                 cost.pricing_version if cost else None,
+                cost.basis.value if cost else None,
                 latency.total_latency_ms,
                 latency.time_to_first_token_ms,
                 latency.queued_ms,

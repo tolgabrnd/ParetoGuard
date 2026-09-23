@@ -30,12 +30,13 @@ async def test_success_scenario_is_the_default() -> None:
     assert response.token_usage.output_tokens > 0
 
 
-async def test_success_scenario_reports_zero_cost() -> None:
+async def test_success_scenario_reports_no_cost_on_its_own() -> None:
+    """MockProvider (like every provider) only reports token usage; cost is
+    computed by `paretoguard.runtime.Runtime` from a `PricingTable` (see
+    test_runtime.py's cost-estimation tests) so it's never fabricated here."""
     provider = MockProvider()
     response = await provider.complete(_request())
-    assert response.cost is not None
-    assert response.cost.total_cost_usd == 0.0
-    assert response.cost.pricing_version == "mock"
+    assert response.cost is None
 
 
 async def test_success_scenario_with_mock_tool_calls_metadata() -> None:

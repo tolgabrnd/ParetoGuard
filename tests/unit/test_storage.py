@@ -6,6 +6,8 @@ from uuid import uuid4
 import pytest
 
 from paretoguard.core.models import (
+    CostBasis,
+    CostRecord,
     ErrorInfo,
     FailureCategory,
     FinishReason,
@@ -126,6 +128,24 @@ def test_record_response(store: ExperimentStore) -> None:
     assert df.height == 1
     assert df["output_text"][0] == "hi"
     assert df["input_tokens"][0] == 10
+
+
+def test_record_response_roundtrips_cost_basis(store: ExperimentStore) -> None:
+    request_id = uuid4()
+    response = _response(request_id).model_copy(
+        update={
+            "cost": CostRecord(
+                input_cost_usd=0.001,
+                output_cost_usd=0.002,
+                pricing_version="test-v1",
+                basis=CostBasis.SIMULATED,
+            )
+        }
+    )
+    store.record_response(response, run_id="run-1")
+    df = store.responses_df(run_id="run-1")
+    assert df["cost_basis"][0] == "simulated"
+    assert df["pricing_version"][0] == "test-v1"
 
 
 def test_record_response_with_error(store: ExperimentStore) -> None:

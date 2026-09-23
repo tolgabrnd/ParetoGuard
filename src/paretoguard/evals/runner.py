@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from paretoguard import __version__
+from paretoguard.core.config import PricingTable
 from paretoguard.core.models import InferenceRequest, RunManifest, TraceEvent
 from paretoguard.evals.graders import GradeOutcome, get_grader
 from paretoguard.evals.models import EvalCase, EvalResult, EvalSuite
@@ -66,6 +67,8 @@ class BenchmarkRunner:
         store: ExperimentStore | None = None,
         retry_policy: RetryPolicy | None = None,
         budget_guard: BudgetGuard | None = None,
+        pricing_table: PricingTable | None = None,
+        pricing_config_version: str | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
@@ -73,6 +76,8 @@ class BenchmarkRunner:
         self._store = store
         self._retry_policy = retry_policy
         self._budget_guard = budget_guard
+        self._pricing_table = pricing_table
+        self._pricing_config_version = pricing_config_version
 
     async def run(self, suite: EvalSuite, *, run_id: str | None = None) -> BenchmarkRunResult:
         run_id = run_id or f"run-{uuid4()}"
@@ -86,6 +91,7 @@ class BenchmarkRunner:
             suite_version=suite.version,
             router_name=None,
             router_config={"provider": self._provider.name, "model": self._model},
+            pricing_config_version=self._pricing_config_version,
             task_count=suite.case_count,
             repetitions=self._config.repetitions,
         )
@@ -96,6 +102,7 @@ class BenchmarkRunner:
             self._provider,
             retry_policy=self._retry_policy,
             budget_guard=self._budget_guard,
+            pricing_table=self._pricing_table,
             max_concurrency=self._config.max_concurrency,
             timeout_s=self._config.timeout_s,
             on_trace_event=self._trace_handler(run_id),
