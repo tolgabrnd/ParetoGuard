@@ -143,3 +143,59 @@ def filter_eligible(
         eligible.append(candidate)
 
     return eligible, excluded
+
+
+def apply_soft_constraints(
+    routing_request: RoutingRequest, candidates: Sequence[ModelSpec]
+) -> tuple[list[ModelSpec], dict[str, str]]:
+    """Excludes candidates whose measured/simulated profile violates a soft
+    (estimate-based) constraint: `max_cost_usd`, `max_latency_ms`,
+    `min_predicted_success`. A candidate with no profile data can't be
+    checked against these and is kept — soft constraints only exclude on
+    positive evidence of violation, never on absence of data. Shared by
+    `RuleRouter` and `ParetoRouter` so both apply the same "subject to"
+    semantics for `RoutingConstraints`.
+    """
+    constraints = routing_request.constraints
+    kept: list[ModelSpec] = []
+    excluded: dict[str, str] = {}
+
+    for candidate in candidates:
+        profile = routing_request.profiles.get(candidate_key(candidate.provider, candidate.name))
+        if profile is None:
+            kept.append(candidate)
+            continue
+
+        if (
+            constraints.max_cost_usd is not None
+            and profile.mean_cost_usd is not None
+            and profile.mean_cost_usd > constraints.max_cost_usd
+        ):
+            excluded[candidate.name] = (
+                f"expected cost ${profile.mean_cost_usd:.4f} exceeds "
+                f"max_cost_usd ${constraints.max_cost_usd:.4f}"
+            )
+            continue
+        if (
+            constraints.max_latency_ms is not None
+            and profile.mean_latency_ms is not None
+            and profile.mean_latency_ms > constraints.max_latency_ms
+        ):
+            excluded[candidate.name] = (
+                f"expected latency {profile.mean_latency_ms:.0f}ms exceeds "
+                f"max_latency_ms {constraints.max_latency_ms:.0f}ms"
+            )
+            continue
+        if (
+            constraints.min_predicted_success is not None
+            and profile.predicted_success is not None
+            and profile.predicted_success < constraints.min_predicted_success
+        ):
+            excluded[candidate.name] = (
+                f"predicted success {profile.predicted_success:.3f} below "
+                f"min_predicted_success {constraints.min_predicted_success:.3f}"
+            )
+            continue
+        kept.append(candidate)
+
+    return kept, excluded

@@ -14,6 +14,7 @@ from paretoguard.routing.protocol import Router
 from paretoguard.routing.types import (
     NoEligibleCandidateError,
     RoutingRequest,
+    apply_soft_constraints,
     candidate_key,
     filter_eligible,
 )
@@ -32,7 +33,7 @@ class RuleRouter(Router):
 
     def route(self, routing_request: RoutingRequest) -> RoutingDecision:
         eligible, excluded = filter_eligible(routing_request)
-        eligible, soft_excluded = self._apply_soft_constraints(routing_request, eligible)
+        eligible, soft_excluded = apply_soft_constraints(routing_request, eligible)
         excluded.update(soft_excluded)
 
         if not eligible:
@@ -60,60 +61,6 @@ class RuleRouter(Router):
             fallback_order=[c.name for c in ranked[1:]],
             excluded_candidates=excluded,
         )
-
-    def _apply_soft_constraints(
-        self, routing_request: RoutingRequest, candidates: list[ModelSpec]
-    ) -> tuple[list[ModelSpec], dict[str, str]]:
-        """Excludes candidates whose measured/simulated profile violates a
-        soft (estimate-based) constraint. A candidate with no profile data
-        can't be checked against these and is kept — soft constraints only
-        exclude on positive evidence of violation, never on absence of data.
-        """
-        constraints = routing_request.constraints
-        kept: list[ModelSpec] = []
-        excluded: dict[str, str] = {}
-
-        for candidate in candidates:
-            profile = routing_request.profiles.get(
-                candidate_key(candidate.provider, candidate.name)
-            )
-            if profile is None:
-                kept.append(candidate)
-                continue
-
-            if (
-                constraints.max_cost_usd is not None
-                and profile.mean_cost_usd is not None
-                and profile.mean_cost_usd > constraints.max_cost_usd
-            ):
-                excluded[candidate.name] = (
-                    f"expected cost ${profile.mean_cost_usd:.4f} exceeds "
-                    f"max_cost_usd ${constraints.max_cost_usd:.4f}"
-                )
-                continue
-            if (
-                constraints.max_latency_ms is not None
-                and profile.mean_latency_ms is not None
-                and profile.mean_latency_ms > constraints.max_latency_ms
-            ):
-                excluded[candidate.name] = (
-                    f"expected latency {profile.mean_latency_ms:.0f}ms exceeds "
-                    f"max_latency_ms {constraints.max_latency_ms:.0f}ms"
-                )
-                continue
-            if (
-                constraints.min_predicted_success is not None
-                and profile.predicted_success is not None
-                and profile.predicted_success < constraints.min_predicted_success
-            ):
-                excluded[candidate.name] = (
-                    f"predicted success {profile.predicted_success:.3f} below "
-                    f"min_predicted_success {constraints.min_predicted_success:.3f}"
-                )
-                continue
-            kept.append(candidate)
-
-        return kept, excluded
 
     def _score_candidates(
         self, routing_request: RoutingRequest, candidates: list[ModelSpec]
