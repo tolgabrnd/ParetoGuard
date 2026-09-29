@@ -24,6 +24,7 @@ from uuid import uuid4
 from paretoguard import __version__
 from paretoguard.core.config import PricingTable
 from paretoguard.core.features import TaskFeatures, extract_task_features
+from paretoguard.core.ids import deterministic_request_id
 from paretoguard.core.models import InferenceRequest, ModelSpec, RunManifest
 from paretoguard.evals.graders import grade_case
 from paretoguard.evals.models import EvalCase, EvalResult, EvalSuite
@@ -166,6 +167,9 @@ class MatrixRunner:
         run_id: str,
     ) -> MatrixRow:
         request = InferenceRequest(
+            request_id=deterministic_request_id(
+                case.case_id, str(repetition), candidate.provider, candidate.name
+            ),
             task_id=case.case_id,
             provider=candidate.provider,
             model=candidate.name,

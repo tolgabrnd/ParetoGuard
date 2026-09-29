@@ -35,6 +35,7 @@ from uuid import UUID, uuid4
 from paretoguard import __version__
 from paretoguard.core.config import PricingTable
 from paretoguard.core.features import extract_task_features
+from paretoguard.core.ids import deterministic_request_id
 from paretoguard.core.models import (
     InferenceRequest,
     ModelSpec,
@@ -202,8 +203,19 @@ class RoutedBenchmarkRunner:
         )
         decision = self._router.route(routing_request)
         selected = next(c for c in self._candidates if c.name == decision.selected_model)
+        # See core.ids.deterministic_request_id's docstring: the router's
+        # choice isn't known until after routing, so the probe_request's
+        # random default request_id (only ever used to extract features)
+        # gets overridden here with one derived from the case/repetition and
+        # the *actual* selected candidate, once that's known.
         request = probe_request.model_copy(
-            update={"provider": selected.provider, "model": selected.name}
+            update={
+                "provider": selected.provider,
+                "model": selected.name,
+                "request_id": deterministic_request_id(
+                    case.case_id, str(repetition), selected.provider, selected.name
+                ),
+            }
         )
 
         response = await runtimes[selected.provider].run(request)

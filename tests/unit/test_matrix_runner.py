@@ -7,6 +7,7 @@ from paretoguard.core.models import Message, ModelSpec, Role
 from paretoguard.evals.matrix import MatrixConfig, MatrixRunner
 from paretoguard.evals.models import EvalCase, EvalSuite, GraderConfig, GraderKind, GroundTruth
 from paretoguard.providers.mock import SCENARIO_METADATA_KEY, MockProvider, MockScenario
+from paretoguard.providers.profiled_mock import ProfiledMockProvider, SimulatedModelProfile
 from paretoguard.storage import ExperimentStore
 
 
@@ -128,3 +129,27 @@ async def test_matrix_runner_persists_through_the_normal_experiment_pipeline() -
         # no longer unique across a matrix's multiple candidates per task.
         case_ids = {r.case_id for r in eval_results}
         assert case_ids == {"case-1::mock-a", "case-1::mock-b", "case-2::mock-a", "case-2::mock-b"}
+
+
+async def test_matrix_runner_is_reproducible_across_independent_runs() -> None:
+    """Regression test: ProfiledMockProvider's outcome is a function of
+    request_id, which previously defaulted to a fresh random UUID4 per
+    InferenceRequest — meaning the *same* (seed, suite, candidates) produced
+    a *different* simulated outcome on every process run. Two completely
+    independent MatrixRunner/ProfiledMockProvider instances (same seed) must
+    now produce byte-identical succeeded/score/cost/latency rows."""
+    candidates = [ModelSpec(name="profile-a", provider="sim", context_window=10_000)]
+    profile = {"profile-a": SimulatedModelProfile(default_success_probability=0.5)}
+
+    async def run_once() -> list[tuple[str, str, bool, float]]:
+        runner = MatrixRunner(
+            candidates,
+            {"sim": ProfiledMockProvider(profile, seed=3)},
+            config=MatrixConfig(repetitions=5),
+        )
+        result = await runner.run(_suite())
+        return [(r.task_id, r.model, r.succeeded, r.latency_ms) for r in result.rows]
+
+    first = await run_once()
+    second = await run_once()
+    assert first == second
