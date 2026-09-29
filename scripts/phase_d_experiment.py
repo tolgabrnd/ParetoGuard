@@ -164,7 +164,12 @@ async def run_routing_comparison() -> None:
         df = build_dataset(matrix_result.rows, seed=0)
         split_counts = df["split"].value_counts().sort("split")
         print(f"Dataset rows: {df.height}, splits: {split_counts.to_dicts()}")
-        df.write_csv(RESULTS_DIR / "training_matrix.csv")
+        # `label` is written to the CSV export only — never added to `df`
+        # itself, which stays exactly the FEATURE_COLUMNS/CANDIDATE_COLUMNS/
+        # LABEL_COLUMNS shape train_learned_router_model etc. expect.
+        df.with_columns(pl.lit("SIMULATION").alias("label")).write_csv(
+            RESULTS_DIR / "training_matrix.csv"
+        )
 
         train_profiles = build_profiles_from_train_split(df)
 
@@ -219,13 +224,22 @@ async def run_routing_comparison() -> None:
                 continue
             summaries.append(summary)
             for model_name, count in summary.selection_distribution.items():
-                selection_rows.append({"router": router.name, "model": model_name, "count": count})
+                selection_rows.append(
+                    {
+                        "router": router.name,
+                        "model": model_name,
+                        "count": count,
+                        "label": "SIMULATION",
+                    }
+                )
 
         best_model = best_fixed_model(df, split="test")
         cheapest_model = cheapest_fixed_model(df, split="test")
         stats = fixed_model_stats(df, split="test")
         oracle = oracle_upper_bound(df, candidates, split="test")
-        stats.write_csv(RESULTS_DIR / "fixed_model_stats.csv")
+        stats.with_columns(pl.lit("SIMULATION").alias("label")).write_csv(
+            RESULTS_DIR / "fixed_model_stats.csv"
+        )
         pl.DataFrame(selection_rows).write_csv(RESULTS_DIR / "selection_distribution.csv")
 
         print("\n=== Routing summary (SIMULATION, held-out test split) ===")
