@@ -37,7 +37,8 @@ dependencies = [
 # OpenAI/Anthropic/Gemini adapters call each provider's REST API directly over
 # httpx (see src/paretoguard/providers/), not the official SDKs, so no SDK
 # extras are declared for them. `torch` is for the optional PyTorch router
-# baseline (planned, not yet implemented).
+# baseline (paretoguard.routing.torch_router, Phase D) — deliberately not a
+# base dependency; `paretoguard.routing` itself never imports torch.
 torch = ["torch>=2.4"]
 
 [project.scripts]

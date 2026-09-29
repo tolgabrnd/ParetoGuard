@@ -38,7 +38,7 @@ repository. Read `docs/BUILD_PLAN.md` and `docs/ARCHITECTURE.md` first.
 
 ```bash
 uv sync                          # install base dependencies
-uv sync --all-extras             # install with optional extras (currently: torch, for the future PyTorch router)
+uv sync --all-extras             # install with optional extras (currently: torch, for the optional PyTorch router baseline)
 uv run pytest tests/unit -v      # unit tests (no network, no keys)
 uv run ruff check .              # lint
 uv run ruff format .             # format
