@@ -30,3 +30,14 @@ class RunManifest(BaseModel):
     environment: dict[str, str] = Field(
         default_factory=dict, description="Non-secret environment metadata only."
     )
+    label: str | None = Field(
+        default=None,
+        description=(
+            "'SIMULATION' or 'LIVE', matching the label convention already used on "
+            "every synthetic CSV artifact in this repo (see e.g. "
+            "routing.reliability_simulation.SimulationSummary.label). None means "
+            "unlabeled/unknown — statistics.regression's run-compatibility check "
+            "treats that conservatively (requires an explicit override to compare "
+            "against a run of a different or unknown label), never assumes it's safe."
+        ),
+    )

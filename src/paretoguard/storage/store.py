@@ -45,11 +45,27 @@ def _loads(value: str | None, default: Any) -> Any:
 
 class ExperimentStore:
     """A versioned DuckDB store for runs, requests, responses, traces, and routing
-    decisions. Defaults to an in-memory database; pass a file path to persist."""
+    decisions. Defaults to an in-memory database; pass a file path to persist.
+
+    **Batches writes in one open transaction** (`begin()` at construction,
+    `commit()` at `close()`/periodically via the public `commit()` method) —
+    found necessary, not a premature optimization: DuckDB autocommits each
+    individual `execute()` by default, and at Phase E.5/F's larger
+    experiment scale that per-statement commit overhead dominates entirely
+    (measured: ~0.2s/task for a 200-task benchmark run with an unbatched
+    store, vs. ~0.02s with none — the same order-of-magnitude finding
+    `scripts/phase_e5_experiment.py` already documented for a file-backed
+    store at thousands of tasks, now shown to bite even an in-memory store
+    at hundreds). Reads always see this store's own uncommitted writes
+    (same-connection read-your-own-writes, same as every database) — only a
+    *separate* connection to the same file, or a process crash before the
+    next `commit()`, would miss them. Call `commit()` explicitly if a
+    long-running process needs writes durable before it closes."""
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self._conn = duckdb.connect(str(db_path))
         apply_pending_migrations(self._conn)
+        self._conn.begin()
 
     def __enter__(self) -> "ExperimentStore":
         return self
@@ -62,16 +78,34 @@ class ExperimentStore:
     ) -> None:
         self.close()
 
+    def commit(self) -> None:
+        """Commits every write so far and opens a fresh transaction so
+        subsequent writes keep batching. Call this periodically in a
+        long-running process that needs writes durable before `close()`
+        (e.g. a crash-recovery concern for a multi-hour run) — not needed
+        for a normal short script, which commits once at `close()`."""
+        self._conn.commit()
+        self._conn.begin()
+
     def close(self) -> None:
+        self._conn.commit()
         self._conn.close()
 
     # -- writes ---------------------------------------------------------
 
     def record_run(self, manifest: RunManifest) -> None:
+        # Named columns (rather than positional VALUES) because `label` was
+        # added to this table by a later ALTER TABLE migration (005) and so
+        # is not in the same physical column position as the fields it's
+        # logically grouped with here — same reasoning as record_response's
+        # cost_basis column.
         self._conn.execute(
             """
-            INSERT OR REPLACE INTO runs VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO runs (
+                run_id, paretoguard_version, git_sha, created_at, os, python_version,
+                seed, suite_name, suite_version, router_name, router_config,
+                pricing_config_version, task_count, repetitions, environment, label
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 manifest.run_id,
@@ -89,6 +123,7 @@ class ExperimentStore:
                 manifest.task_count,
                 manifest.repetitions,
                 _dumps(manifest.environment),
+                manifest.label,
             ],
         )
 
@@ -272,6 +307,7 @@ class ExperimentStore:
             task_count=row["task_count"],
             repetitions=row["repetitions"],
             environment=_loads(row["environment"], {}),
+            label=row["label"],
         )
 
     def list_runs(self) -> list[RunManifest]:

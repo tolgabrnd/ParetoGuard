@@ -327,6 +327,41 @@ in-process and across two fully independent process invocations (CSV diff).
   ~9,400 tasks (tens of thousands of unbatched single-row `INSERT`s across six
   tables) took minutes rather than seconds and was abandoned in favor of computing
   every metric directly from the in-memory result objects each library function
-  already returns. Flagged as Phase F-adjacent storage technical debt, not fixed here.
+  already returns. Flagged as Phase F-adjacent storage technical debt at the time.
+
+### Phase F item: `ExperimentStore` transaction batching (2026-09-30)
+
+Commit 31's regression engine (`statistics.regression.check_regression`) needs to
+read back real persisted `EvalResult` rows, which meant actually hitting the
+`ExperimentStore` scaling limitation flagged above rather than continuing to route
+around it. **Root-caused precisely, not just observed again**: DuckDB autocommits
+every individual `execute()` call by default — each commit alone was measured at
+roughly 0.2s/task for a `BenchmarkRunner` run through a store (46s for 200 tasks),
+*even against an in-memory (`:memory:`) database*, not only a file-backed one. Fixed:
+`ExperimentStore` now opens one transaction at construction and commits it (opening a
+fresh one) only at `close()` or an explicit new `commit()` method — every write across
+the store's lifetime batches into that one transaction unless a caller asks to flush
+sooner. Reads still see the store's own uncommitted writes (ordinary same-connection
+read-your-own-writes); only a *separate* connection to the same file, or a crash
+before the next `commit()`, would miss them — matching this repo's normal
+`with ExperimentStore(...) as store:` single-connection usage throughout.
+
+**This measurably helped but did not fully explain the cost**: raw, batched
+`INSERT OR REPLACE` calls in a tight loop still measured ~7.5ms *per statement* on
+this development machine (200 simple inserts in one transaction: ~1.5s) — DuckDB's
+Python binding/connection overhead per `execute()` call here is meaningfully higher
+than the sub-millisecond figure typically quoted for DuckDB, for reasons not fully
+diagnosed (possibly Windows-specific, possibly this DuckDB version, possibly
+antivirus real-time scanning of the process — not conclusively isolated, and stated
+as an open question rather than a confirmed cause). A full fix would need batched
+multi-row writes (`executemany`, or buffering rows in memory and flushing in bulk),
+which needs `evals.runner.BenchmarkRunner`/`routing.execution.ClosedLoopExecutor`'s
+per-task call sites restructured too — a larger storage-layer change, deliberately
+not attempted in this commit. `tests/unit/test_statistics_regression.py`'s fixtures
+route around the remaining cost by writing `EvalResult` rows directly via
+`record_eval_result` (skipping `record_request`/`record_response`, which
+`check_regression` never reads anyway) rather than running a full benchmark pass —
+a legitimate, faster way to unit-test the regression engine's logic against real
+stored rows, not a workaround that hides a correctness gap.
 
 This file will grow with specific, dated entries as each subsystem is implemented.

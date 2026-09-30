@@ -174,6 +174,10 @@ def _migration_004_outcome_events(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _migration_005_run_label(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute("ALTER TABLE runs ADD COLUMN label VARCHAR")
+
+
 # (version, description, apply). Append new entries here for future schema changes;
 # never edit an already-released migration in place.
 MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] = [
@@ -188,6 +192,11 @@ MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] =
         4,
         "add outcome_events table (ClosedLoopExecutor's one-row-per-task summary, Commit 29)",
         _migration_004_outcome_events,
+    ),
+    (
+        5,
+        "add label column to runs (SIMULATION/LIVE, Commit 31 run-compatibility checks)",
+        _migration_005_run_label,
     ),
 ]
 

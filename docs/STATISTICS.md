@@ -1,10 +1,10 @@
 # Statistics
 
-This document describes `paretoguard.statistics` (Phase F, Commit 30):
-confidence intervals, hypothesis tests, effect sizes, multiple-comparison
-correction, Pareto frontier analysis, and the typed `ExperimentComparison`
-result that ties them together. Regression detection (Commit 31) and report
-generation (Commit 32) are documented separately and build on this module.
+This document describes `paretoguard.statistics`: confidence intervals,
+hypothesis tests, effect sizes, multiple-comparison correction, Pareto
+frontier analysis, the typed `ExperimentComparison` result (Commit 30), and
+regression detection built on top of it (Commit 31). Report generation
+(Commit 32) is documented separately and builds on this module.
 
 Every statistic here answers a real experiment question this repo actually
 asks — see each function's own docstring for *why* it exists, not just what
@@ -138,3 +138,58 @@ and, for every dominated point, exactly which frontier member(s) dominate
 it — an explanation, not just a verdict. Latency is optional; when omitted,
 every point is given latency `0.0` (excluded from dominance) so a caller
 reporting only cost/success doesn't need to fabricate latency data.
+
+## Regression detection (Commit 31)
+
+`statistics.regression.check_regression(store, baseline_run_id,
+candidate_run_id, policy)` compares two persisted `ExperimentStore` runs and
+decides whether a `RegressionPolicy` is triggered — operating on actual
+stored `EvalResult`/`OutcomeEvent` rows, never manually entered summary
+values.
+
+**Run compatibility is checked before any metric is compared**
+(`check_run_compatibility`): suite name, suite version, and simulation/live
+`label` must match unless `allow_simulation_vs_live=True` is set explicitly
+— comparing a `SIMULATION`-labeled run against a `LIVE`-labeled run (or
+either against an unlabeled one) is otherwise rejected outright, never
+silently allowed. If both runs claim the same suite but their actual task ID
+sets differ, that is *also* treated as an incompatibility (not a silent
+fallback to an independent-sample comparison) — a candidate run that
+accidentally covers a different subset of the same suite is a data problem
+to surface loudly.
+
+**Two independent gates per metric** (`MetricRegressionPolicy`):
+- `max_practical_change` — a real-world-meaningful threshold in the
+  metric's own units (percentage points, USD, milliseconds). Always
+  checked.
+- `require_statistical_significance` (default `True`) — the change must
+  also be distinguishable from noise (using the Holm-Bonferroni-adjusted
+  p-value when `apply_multiple_comparison_correction` is enabled, the raw
+  one otherwise).
+
+Both must pass (when both are configured) for a metric to be `triggered`.
+This is deliberate: a tiny statistically-significant change at huge `n`
+does not fail a check on the practical gate alone, and a large but
+noisy/small-`n` change does not fail it on the significance gate alone.
+
+**Known metrics**: `success_rate`, `recovery_rate` (derived from
+`OutcomeEvent`s whose first attempt failed — a proportion of *raw
+failures*, matching `evals.metrics`'s `raw_failure_rate` convention),
+`structured_output_validity_rate` (JSON_SCHEMA-graded results only),
+`tool_use_correctness_rate` (TOOL_TRAJECTORY-graded results only), `cost_usd`,
+`latency_ms`, and `p95_latency_ms` — the last one's *statistical* test still
+runs on the raw per-task latency distribution (Wilcoxon/Mann-Whitney), but
+its *practical* threshold is applied to the actual aggregate p95 figure,
+not the mean `compare_continuous_outcomes` otherwise reports.
+
+**Outcomes and exit codes**, mirroring what a future CLI (`paretoguard
+regress`, Phase G) would return, tested at this service layer since CLI
+exposure itself is out of Phase F's scope:
+
+| `RegressionOutcome` | Exit code | Meaning |
+|---|---|---|
+| `OK` | 0 | No configured metric triggered |
+| `REGRESSION_DETECTED` | 1 | At least one metric triggered |
+| `INCOMPATIBLE_RUNS` | 2 | Suite/label/task-id compatibility check failed |
+| `INSUFFICIENT_DATA` | 3 | Every configured metric was unavailable or below the minimum sample size |
+| `CONFIG_ERROR` | 4 | Empty policy, or a run id that doesn't exist |

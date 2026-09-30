@@ -58,7 +58,7 @@ flowchart TD
 | `chaos` | Deterministic fault injection | Run unconditionally outside experiments |
 | `recovery` | Retry/fallback/circuit-breaker/escalation policy. `recovery.health` (Phase E.5) advises fallback *ordering* from `HealthTracker` signals (EMA success/timeout rate, latency drift, consecutive-failure streak) — a separate, narrower mechanism from both `routing.reliability.ReliabilityAwareRouter` (initial-routing ranking) and `CircuitBreaker` (hard state gating) | Hide failures silently. Never hard-exclude a candidate on health alone — see `recovery.health`'s module docstring |
 | `telemetry` | Trace events, rolling health metrics | Persist directly to disk (delegates to storage) |
-| `storage` | DuckDB schema, migrations, export | Contain domain logic |
+| `storage` | DuckDB schema, migrations, export. Batches all writes in one open transaction per store lifetime (`commit()` at `close()` or on demand) — see `docs/LIMITATIONS.md`'s Phase F entry for why this was necessary, not premature optimization | Contain domain logic |
 | `statistics` | Confidence intervals (bootstrap), significance tests (auto-selected paired/independent), effect sizes, multiple-comparison correction, Pareto frontier analysis, `ExperimentComparison`, regression detection | Be called from CLI/API handlers directly for business decisions; reduce an analysis to "significant/not significant" alone; claim causality |
 | `reports` | Render stored results into docs/charts | Compute new metrics not already stored |
 | `api` | FastAPI HTTP boundary | Contain business logic |
