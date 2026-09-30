@@ -22,6 +22,7 @@ from paretoguard.core.models import (
 from paretoguard.evals.models import EvalCase, GraderConfig, GraderKind, GroundTruth
 from paretoguard.providers.base import Provider
 from paretoguard.recovery.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
+from paretoguard.recovery.context import RecoveryContext, RecoveryDecision
 from paretoguard.recovery.fallback import FallbackPolicy
 from paretoguard.recovery.health import RecoveryHealthPolicy
 from paretoguard.recovery.policy import RecoveryPolicy
@@ -239,6 +240,74 @@ async def test_validate_quality_false_restores_pre_e5_behavior() -> None:
     assert outcome.attempt_count == 1  # never recovered: treated as success in-loop
     assert outcome.recovery_actions == []
     assert not result.succeeded  # the final EvalResult still grades it correctly
+
+
+class _ContextSpyPolicy(RecoveryPolicy):
+    """Captures the `RecoveryContext` each `decide()` call receives, then
+    delegates to a real policy — lets a test inspect what the executor
+    actually built without needing its own RecoveryPolicy subclass logic."""
+
+    captured: list[RecoveryContext]
+
+    def __init__(self, delegate: RecoveryPolicy) -> None:
+        object.__setattr__(self, "_delegate", delegate)
+        object.__setattr__(self, "captured", [])
+
+    def decide(self, context, candidates) -> RecoveryDecision:  # type: ignore[no-untyped-def]
+        self.captured.append(context)
+        return self._delegate.decide(context, candidates)  # type: ignore[attr-defined]
+
+
+async def test_latency_drift_excluded_from_recovery_context_by_default() -> None:
+    """Regression test for a real determinism bug found via Phase E.5's
+    larger-scale sustained_outage run: HealthTracker's latency EMA is
+    derived from real wall-clock timing (even against MockProvider), so
+    feeding it into RecoveryContext.latency_drift by default made recovery
+    decisions non-deterministic across identical runs. Must stay empty
+    unless include_latency_drift_in_recovery=True."""
+    provider = _KeyedScriptedProvider("mock", {"model-a": [_fail()], "model-b": [_ok("answer")]})
+    tracker = HealthTracker()
+    # Seed enough latency samples that latency_drift_ratio is not None.
+    for _ in range(5):
+        tracker.record_outcome("mock", "model-b", succeeded=True, latency_ms=10.0)
+    router = StaticRouter(provider="mock", model="model-a")
+    spy = _ContextSpyPolicy(
+        RecoveryPolicy(retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0))
+    )
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=spy,
+        health_tracker=tracker,
+        retry_policy=_NO_RUNTIME_RETRY,
+    )
+    await executor.execute(_case())
+    assert len(spy.captured) == 1
+    assert spy.captured[0].latency_drift == {}
+
+
+async def test_latency_drift_populated_when_explicitly_enabled() -> None:
+    provider = _KeyedScriptedProvider("mock", {"model-a": [_fail()], "model-b": [_ok("answer")]})
+    tracker = HealthTracker()
+    for _ in range(5):
+        tracker.record_outcome("mock", "model-b", succeeded=True, latency_ms=10.0)
+    router = StaticRouter(provider="mock", model="model-a")
+    spy = _ContextSpyPolicy(
+        RecoveryPolicy(retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0))
+    )
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=spy,
+        health_tracker=tracker,
+        retry_policy=_NO_RUNTIME_RETRY,
+        include_latency_drift_in_recovery=True,
+    )
+    await executor.execute(_case())
+    assert len(spy.captured) == 1
+    assert "mock:model-b" in spy.captured[0].latency_drift
 
 
 async def test_recently_degraded_candidate_is_less_likely_chosen_as_fallback() -> None:

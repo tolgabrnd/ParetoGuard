@@ -159,6 +159,31 @@ stronger claims than the evidence supports.
   its threshold affects the outcome. This is a deliberate simplicity tradeoff (see
   "no magic composite score" in the design goal), not an oversight, but it does mean
   the four-tier classification is coarser than the raw signals it's built from.
+
+  **A real determinism bug this introduced, found and fixed during item 5's
+  larger-scale run, not by the item-1 unit tests**: `ClosedLoopExecutor` originally
+  snapshotted `HealthTracker.latency_drift_ratio` onto `RecoveryContext.latency_drift`
+  unconditionally, every attempt. That ratio is derived from real `time.perf_counter()`
+  latency measurements — `MockProvider` measures its own (near-instant, but real)
+  response time rather than returning a fixed value, despite its module docstring's
+  "fully deterministic" claim not extending to that one field (see the wall-clock
+  latency entry below, which already excluded latency *reporting* from determinism
+  checks — this is that same fact finally mattering for a *decision*, not just a
+  reported number). At `resilience_v1`'s small default scale the effect never showed
+  up in two-run diffs; at Phase E.5's larger `sustained_outage` scale
+  (`scripts/phase_e5_experiment.py`, 1,000 steps), two independent runs of the
+  identical scenario produced different `average_attempts` for every fallback-enabled,
+  health-aware config, confirmed by bisection to trace to exactly this. Fixed:
+  `ClosedLoopExecutor` gained `include_latency_drift_in_recovery` (default `False`) —
+  `RecoveryContext.latency_drift` now stays empty unless a caller explicitly opts in,
+  accepting non-determinism as a natural, already-present consequence of using real
+  timing data against a real provider (where reproducibility was never available to
+  begin with). EMA success rate, EMA timeout rate, and consecutive failures are all
+  purely outcome-derived (never wall-clock-based) and remain fully deterministic and
+  on by default. Regression-tested
+  (`test_latency_drift_excluded_from_recovery_context_by_default`,
+  `test_latency_drift_populated_when_explicitly_enabled`) and confirmed by rerunning
+  the large-scale scenario four consecutive times with zero diffs.
 - **PARTIALLY RESOLVED in Phase E.5**: `AgentStep.fault_id` was previously wired for
   tool-level faults only; provider-level faults reaching an agent step were visible in
   the resulting `TerminationReason`/response error but never linked back to their
@@ -248,5 +273,60 @@ stronger claims than the evidence supports.
   the real `time.monotonic` clock here would make cooldown/probe timing depend on how
   fast this process happens to execute 300 simulated steps (well under a second),
   making the result non-reproducible in a way unrelated to the scenario itself.
+
+### Phase E.5 item 5: expanded sample size, actual findings (2026-09-30)
+
+`scripts/phase_e5_experiment.py` reruns the three Commit-29/Phase-E.5 benchmarks at
+~8-10x the default CI-friendly scale (9,400 total deterministic task executions: 4,000
+for the flagship resilience comparison at 200 tasks/cell, 5,000 for a 1,000-step
+sustained outage, 400 for the escalation comparison at 200 tasks/arm), explicitly to
+give Phase F's statistics work enough samples per cell for meaningful confidence
+intervals — not to manufacture significance (see the script's own docstring for the
+CI-half-width reasoning behind choosing `n=200`). Verified deterministic both
+in-process and across two fully independent process invocations (CSV diff).
+
+- **A real determinism bug was found and fixed while building this script — see the
+  Phase E.5 item 1 entry above for the full writeup.** `HealthTracker.latency_drift_ratio`
+  (real wall-clock-derived) feeding `RecoveryContext.latency_drift` by default made
+  `sustained_outage_benchmark`'s health-aware configs non-reproducible at 1,000-step
+  scale, even though the same effect never showed up at `resilience_v1`'s small
+  default scale. Fixed via a new `include_latency_drift_in_recovery` flag on
+  `ClosedLoopExecutor`, off by default.
+- **A larger, surprising, and genuinely reportable negative finding: circuit breaker
+  makes `resilience_v1`'s flagship comparison *worse*, not better, at 30% fault with
+  n=200.** `D-retry_fallback_circuit_breaker` and `E-full_policy` both drop to 0.770
+  task success (`recovery_rate=0.333`) at the 30% fault level — markedly worse than
+  `C-retry_fallback`'s 1.000 and even `B-retry_only`'s 0.985 — a divergence the
+  original n=24 benchmark's numbers never revealed (at n=24, D and E matched C's
+  1.000). The mechanism, confirmed by direct circuit-state inspection: each
+  `(fault_level, config)` cell shares *one* `CircuitBreaker` instance across all 200
+  tasks in that cell, and — unlike `sustained_outage_benchmark`, which was
+  deliberately given a virtual clock for exactly this reason —
+  `resilience_benchmark`'s flagship comparison uses the real `time.monotonic` clock.
+  A cell of 200 tasks against `MockProvider` completes in on the order of tens of
+  milliseconds; `CircuitBreakerConfig`'s default `cooldown_s=5.0` therefore has no
+  realistic chance to elapse within a cell's actual run time. At a high enough fault
+  rate, two or more candidates' circuits can trip (2 consecutive failures each) and
+  then functionally stay OPEN for the rest of that cell, occasionally leaving a task
+  with no eligible fallback candidate at all — an outright `ABSTAIN`, not a recovered
+  failure. This is a real property of the flagship comparison as configured (real
+  clock, shared breaker per cell), not a bug in `CircuitBreaker` itself — and it is
+  reported here exactly as instructed: "if circuit breaker adds overhead without
+  benefit... report it." **A caveat on the caveat**: because execution is *reliably*
+  much faster than the 5-second cooldown on this machine, the result reproduces
+  exactly across repeated and cross-process runs (verified) — but that reproducibility
+  is an artifact of execution speed being consistently fast relative to a fixed
+  real-time threshold, not a seed-derived guarantee the way every other field in this
+  comparison is. A future fix (giving `resilience_benchmark` its own virtual/per-task
+  clock, the way `sustained_outage_benchmark` already has one) is flagged as a risk
+  for Phase F rather than silently applied here — doing so now would change
+  already-reported Commit 29 numbers without being asked to.
+- **`ExperimentStore` persistence does not scale to this script's size without
+  batching** — see the script's own module docstring ("No `ExperimentStore`
+  persistence at this scale") for the measured finding: a file-backed store at
+  ~9,400 tasks (tens of thousands of unbatched single-row `INSERT`s across six
+  tables) took minutes rather than seconds and was abandoned in favor of computing
+  every metric directly from the in-memory result objects each library function
+  already returns. Flagged as Phase F-adjacent storage technical debt, not fixed here.
 
 This file will grow with specific, dated entries as each subsystem is implemented.

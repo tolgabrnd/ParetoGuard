@@ -314,6 +314,20 @@ class ClosedLoopExecutor:
     candidate; every subsequent switch within the same task is a
     `RecoveryDecision`, not a fresh routing decision, matching "the router
     decides, the execution/control plane owns lifecycle state."
+
+    `include_latency_drift_in_recovery` (Phase E.5, default `False`):
+    whether `RecoveryContext.latency_drift` is populated from
+    `HealthTracker.latency_drift_ratio`. Off by default because that
+    signal is derived from real wall-clock latency measurements — accurate
+    and useful against a real provider, but not reproducible against
+    `MockProvider` either, whose own measured latency is real
+    `time.perf_counter()` timing despite the provider's otherwise-full
+    determinism (see `providers.mock`'s module docstring and
+    `docs/LIMITATIONS.md`). Feeding it into a recovery *decision* — as
+    opposed to just reporting it, which every other latency figure in this
+    repo already does safely — makes that decision's outcome non-
+    deterministic too. A caller running against a real provider, where
+    reproducibility was never on the table to begin with, can enable it.
     """
 
     def __init__(
@@ -332,6 +346,7 @@ class ClosedLoopExecutor:
         profiles: dict[str, CandidateProfile] | None = None,
         max_attempts: int = 5,
         validate_quality: bool = True,
+        include_latency_drift_in_recovery: bool = False,
     ) -> None:
         missing = {c.provider for c in candidates} - set(providers)
         if missing:
@@ -348,6 +363,7 @@ class ClosedLoopExecutor:
         self._profiles = dict(profiles or {})
         self._max_attempts = max_attempts
         self._validate_quality = validate_quality
+        self._include_latency_drift_in_recovery = include_latency_drift_in_recovery
         self._runtimes = {
             name: Runtime(
                 provider,
@@ -523,7 +539,22 @@ class ClosedLoopExecutor:
                 task_features=features,
                 attempted=tuple(attempted[:-1]),
                 health_snapshots=self._health_snapshot(),
-                latency_drift=self._latency_drift_snapshot(),
+                # Opt-in only (`include_latency_drift_in_recovery`, default
+                # False) — see this class's docstring. HealthTracker's
+                # latency EMA is derived from real time.perf_counter()
+                # measurements (MockProvider included: see its own module
+                # docstring's determinism claim, which does not extend to
+                # latency), so feeding it into a recovery *decision* by
+                # default would make that decision non-deterministic too.
+                # Found via Phase E.5's larger-scale sustained_outage run:
+                # two runs of the identical scenario produced different
+                # average_attempts for the health-aware fallback-enabled
+                # configs until this was made opt-in.
+                latency_drift=(
+                    self._latency_drift_snapshot()
+                    if self._include_latency_drift_in_recovery
+                    else {}
+                ),
                 circuit_snapshots=self._circuit_breaker.all_snapshots()
                 if self._circuit_breaker
                 else {},

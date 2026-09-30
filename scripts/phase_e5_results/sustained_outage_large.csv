@@ -1,0 +1,6 @@
+recovery_config,task_success_rate,task_success_rate_during_outage,average_attempts,fallback_count,circuit_open_transitions,half_open_probe_count,time_to_detect,time_to_reroute,time_to_recover,unnecessary_reroute_count,mean_latency_ms_baseline,mean_latency_ms_outage,label
+A-no_recovery,0.652,0.1425,1.0,0,0,0,0,,,0,0.006301503550882141,0.0009969997336156666,SIMULATION
+B-retry_only,0.753,0.3825,1.638,0,0,0,0,,,0,0.006339499959722161,0.002296003221999854,SIMULATION
+C-retry_fallback,1.0,1.0,1.641,290,0,0,0,0,0,0,0.004452169135523339,0.005045000871177763,SIMULATION
+D-retry_fallback_circuit_breaker,1.0,1.0,1.367,341,14,0,0,0,0,0,0.0044816619871805114,0.00494749954668805,SIMULATION
+E-full_policy,1.0,1.0,1.367,341,14,0,0,0,0,0,0.00472500027778248,0.004822748596780002,SIMULATION

@@ -1,0 +1,2 @@
+no_validation_success_rate,validation_escalation_success_rate,no_validation_escalation_rate,validation_escalation_rate,success_rate_delta,added_average_attempts,added_mean_latency_ms,label
+0.375,1.0,0.0,0.625,0.625,0.625,0.0047070038272067904,SIMULATION
