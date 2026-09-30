@@ -102,11 +102,25 @@ produced).
 `agents.executor.AgentExecutor`'s optional `fault_injector` constructor
 argument applies **tool**-category faults immediately before each
 `tool.run()` call — the one injection point the executor uniquely owns.
-Provider-category faults need no executor-side integration at all: wrap the
-`Provider` passed to the executor's own `Runtime` in `FaultyProvider`, and
-every step's request already carries `chaos_step` for it to key on. See
-`structured_agent_v1`'s module docstring for why that suite itself does not
-use fault injection (it uses a fixed deterministic script instead, to
-isolate "does the executor handle a scripted failure gracefully" from "did
-chaos draw a failure this run") and `docs/LIMITATIONS.md` for what is and
-is not wired between `agents` and `chaos` in Phase E.
+Provider-category faults are *applied* with no executor-side integration at
+all: wrap the `Provider` passed to the executor's own `Runtime` in
+`FaultyProvider`, and every step's request already carries `chaos_step` for
+it to key on. See `structured_agent_v1`'s module docstring for why that
+suite itself does not use fault injection (it uses a fixed deterministic
+script instead, to isolate "does the executor handle a scripted failure
+gracefully" from "did chaos draw a failure this run") and
+`docs/LIMITATIONS.md` for what is and is not wired between `agents` and
+`chaos`.
+
+**Attributing a provider fault back to its step (Phase E.5)**: the same
+`fault_injector` passed to `AgentExecutor` is additionally consulted
+read-only, once per step, to label `AgentStep.fault_id` when a
+PROVIDER-category fault hits — `FaultInjector.faults_for` being a pure
+function of its inputs is exactly what makes this safe: querying it a
+second time (once for observation, once inside the real `FaultyProvider`
+for application) can never desync from what actually happened, *provided
+both call sites share the same injector instance* (same policies, same
+seed). Passing a different injector to each produces a confidently wrong
+attribution rather than an error — there is no way for the executor to
+detect a mismatch — so every caller in this repo passes one shared injector
+to both places (see `test_agent_executor.py`'s attribution tests).

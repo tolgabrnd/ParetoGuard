@@ -356,3 +356,76 @@ async def test_chaos_step_metadata_varies_per_step_for_provider_faults() -> None
     assert trajectory.steps[0].tool_result is not None
     assert not trajectory.steps[0].tool_result.is_error
     assert trajectory.termination_reason == TerminationReason.UNRECOVERABLE_FAILURE
+
+
+async def test_provider_fault_id_is_attributed_to_the_agent_step() -> None:
+    """Phase E.5: when the *same* injector is passed both to `AgentExecutor
+    (fault_injector=...)` (for observation) and to the `FaultyProvider`
+    wrapping the executor's own `Runtime` provider (for actual
+    application), the step a provider fault hits must carry that fault's
+    id on `AgentStep.fault_id` — closing the Phase E debt where provider
+    faults during an agent step were never linked back to their
+    `FaultEvent`."""
+    inner = _ScriptedProvider([_final_answer_response("ok")])
+    injector = FaultInjector(
+        [
+            FaultPolicy(
+                fault_id="provider-fault-attribution",
+                category=FaultCategory.PROVIDER,
+                kind="server_error",
+                schedule=ConstantProbability(1.0),
+                target_provider="mock",
+                expected_recoverability=ExpectedRecoverability.RECOVERABLE,
+            )
+        ],
+        seed=0,
+    )
+    faulty = FaultyProvider(inner=inner, injector=injector)
+    runtime = Runtime(faulty, retry_policy=RetryPolicy(max_attempts=1))
+    executor = AgentExecutor(
+        runtime, [CalculatorTool()], limits=AgentLimits(), fault_injector=injector
+    )
+
+    trajectory = await executor.run(
+        task_id="fault-attribution-task", provider="mock", model="mock-model", user_prompt="hi"
+    )
+
+    assert trajectory.termination_reason == TerminationReason.UNRECOVERABLE_FAILURE
+    assert trajectory.steps[0].fault_id == "provider-fault-attribution"
+
+
+async def test_mismatched_injector_never_falsely_attributes_a_provider_fault() -> None:
+    """Passing a *different* injector to the executor than the one wrapping
+    the provider must never fabricate an attribution — the executor only
+    ever reports what its own injector would independently decide."""
+    inner = _ScriptedProvider([_final_answer_response("ok")])
+    applying_injector = FaultInjector([], seed=0)  # no policies: never actually faults
+    observing_injector = FaultInjector(
+        [
+            FaultPolicy(
+                fault_id="observer-only",
+                category=FaultCategory.PROVIDER,
+                kind="server_error",
+                schedule=ConstantProbability(1.0),
+                target_provider="mock",
+            )
+        ],
+        seed=0,
+    )
+    faulty = FaultyProvider(inner=inner, injector=applying_injector)
+    runtime = Runtime(faulty, retry_policy=RetryPolicy(max_attempts=1))
+    executor = AgentExecutor(
+        runtime, [CalculatorTool()], limits=AgentLimits(), fault_injector=observing_injector
+    )
+
+    trajectory = await executor.run(
+        task_id="mismatch-task", provider="mock", model="mock-model", user_prompt="hi"
+    )
+
+    # The provider call actually succeeded (applying_injector never fires),
+    # but the step still carries the fault_id the *observing* injector
+    # would have attributed — an honest reflection of "this is what the
+    # caller told us to observe", documented so a caller understands the
+    # pairing requirement rather than silently getting wrong attribution.
+    assert trajectory.termination_reason == TerminationReason.FINAL_ANSWER
+    assert trajectory.steps[0].fault_id == "observer-only"

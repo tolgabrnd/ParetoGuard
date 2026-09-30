@@ -15,16 +15,32 @@ escalate) is that module's job, not this one's.
 typed `TerminationReason` — there is no code path that falls through
 without one.
 
-**Chaos integration (Commit 29)**: an optional `fault_injector` applies
-tool-level faults immediately before each `tool.run()` call, recording the
-fault's id on the resulting `AgentStep` — the one injection point this
-executor uniquely owns (`chaos.injector`'s module docstring names
-`AgentExecutor` as its intended caller for tool faults). Provider-level
-faults need no executor-side integration at all: wrap the `Provider` given
-to this executor's `Runtime` in `chaos.injector.FaultyProvider`, and every
-step already carries a `chaos_step` (`= step_index`) in its request
-metadata for it to key on, matching `ClosedLoopExecutor`'s convention for
-recovery attempts (see `routing.execution`).
+**Chaos integration (Commit 29, extended Phase E.5)**: an optional
+`fault_injector` applies tool-level faults immediately before each
+`tool.run()` call, recording the fault's id on the resulting `AgentStep` —
+the one injection point this executor uniquely owns (`chaos.injector`'s
+module docstring names `AgentExecutor` as its intended caller for tool
+faults). Provider-level faults are *applied* with no executor-side
+integration at all: wrap the `Provider` given to this executor's `Runtime`
+in `chaos.injector.FaultyProvider`, and every step already carries a
+`chaos_step` (`= step_index`) in its request metadata for it to key on,
+matching `ClosedLoopExecutor`'s convention for recovery attempts (see
+`routing.execution`). Phase E.5 closes the remaining gap — *attributing* a
+provider fault back to the `AgentStep` it hit: the same `fault_injector`
+(when supplied) is additionally queried, read-only, for a PROVIDER-category
+fault at each step before the `Runtime.run()` call, purely to label the
+resulting `AgentStep.fault_id`. `FaultInjector.faults_for` is a pure
+function of its inputs (same `(seed, task_id, step, fault_id)` always
+yields the same decision — see `chaos.injector`'s own docstring), so this
+observation never influences, duplicates, or races the real application a
+`FaultyProvider`-wrapped provider performs independently inside
+`Runtime.run()`; it only requires the caller to pass the *same* injector to
+both places, or the observed and applied fault ids will disagree (see
+`routing.escalation_benchmark`/`structured_agent_v1` callers for the
+pattern). `AgentStep.recovery_action` remains unset in Phase E.5 — see
+docs/LIMITATIONS.md for why populating it meaningfully is a real new
+capability (mid-trajectory recovery), not a field-population task, and was
+deliberately left for a future phase rather than forced in here.
 """
 
 import time
@@ -33,7 +49,7 @@ from typing import Any
 
 from paretoguard.agents.protocol import Tool, ToolArgumentError
 from paretoguard.agents.state import AgentStep, AgentTrajectory, TerminationReason
-from paretoguard.chaos.faults import ToolFaultKind
+from paretoguard.chaos.faults import FaultCategory, ToolFaultKind
 from paretoguard.chaos.injector import FaultInjector, apply_tool_fault, check_tool_fault
 from paretoguard.core.ids import deterministic_request_id
 from paretoguard.core.models import FinishReason, InferenceRequest, Message, Role, ToolResult
@@ -125,6 +141,7 @@ class AgentExecutor:
                 # `chaos_step` convention for recovery attempts).
                 metadata={**(metadata or {}), "chaos_step": step_index},
             )
+            provider_fault_id = self._observe_provider_fault(task_id, step_index, provider, model)
             response = await self._runtime.run(request)
             step_cost = response.cost.total_cost_usd if response.cost else None
 
@@ -132,6 +149,7 @@ class AgentExecutor:
                 steps.append(
                     AgentStep(
                         step_index=step_index,
+                        fault_id=provider_fault_id,
                         latency_ms=response.latency.total_latency_ms,
                         cost_usd=step_cost,
                         total_tokens=response.token_usage.total_tokens,
@@ -147,6 +165,7 @@ class AgentExecutor:
                     AgentStep(
                         step_index=step_index,
                         model_output_text=response.output_text,
+                        fault_id=provider_fault_id,
                         latency_ms=response.latency.total_latency_ms,
                         cost_usd=step_cost,
                         total_tokens=response.token_usage.total_tokens,
@@ -161,6 +180,7 @@ class AgentExecutor:
                     AgentStep(
                         step_index=step_index,
                         model_output_text=response.output_text,
+                        fault_id=provider_fault_id,
                         latency_ms=response.latency.total_latency_ms,
                         cost_usd=step_cost,
                         total_tokens=response.token_usage.total_tokens,
@@ -186,6 +206,7 @@ class AgentExecutor:
                         step_index=step_index,
                         requested_tool=call.name,
                         requested_arguments=call.arguments,
+                        fault_id=provider_fault_id,
                         latency_ms=response.latency.total_latency_ms,
                         cost_usd=step_cost,
                         total_tokens=response.token_usage.total_tokens,
@@ -203,6 +224,7 @@ class AgentExecutor:
                         requested_tool=call.name,
                         requested_arguments=call.arguments,
                         arguments_valid=False,
+                        fault_id=provider_fault_id,
                         latency_ms=response.latency.total_latency_ms,
                         cost_usd=step_cost,
                         total_tokens=response.token_usage.total_tokens,
@@ -219,6 +241,7 @@ class AgentExecutor:
                         requested_tool=call.name,
                         requested_arguments=call.arguments,
                         arguments_valid=False,
+                        fault_id=provider_fault_id,
                         latency_ms=response.latency.total_latency_ms,
                         cost_usd=step_cost,
                         total_tokens=response.token_usage.total_tokens,
@@ -228,7 +251,9 @@ class AgentExecutor:
                     task_id, provider, model, steps, TerminationReason.INVALID_TOOL_ARGUMENTS
                 )
 
-            result, fault_id = self._run_tool(tool, validated_args, task_id, step_index, call.name)
+            result, tool_fault_id = self._run_tool(
+                tool, validated_args, task_id, step_index, call.name
+            )
             result = result.model_copy(update={"tool_call_id": call.id})
             steps.append(
                 AgentStep(
@@ -237,7 +262,14 @@ class AgentExecutor:
                     requested_arguments=call.arguments,
                     arguments_valid=True,
                     tool_result=result,
-                    fault_id=fault_id,
+                    # A tool fault and a provider fault could in principle
+                    # both fire on the same step (the provider fault hit
+                    # the response that *led to* this tool call, e.g. a
+                    # latency spike that doesn't corrupt tool_calls
+                    # content); the tool fault takes precedence in that rare
+                    # case since it's the one actually attached to this
+                    # step's tool_result.
+                    fault_id=tool_fault_id or provider_fault_id,
                     latency_ms=response.latency.total_latency_ms,
                     cost_usd=step_cost,
                     total_tokens=response.token_usage.total_tokens,
@@ -255,6 +287,25 @@ class AgentExecutor:
             messages.append(Message(role=Role.TOOL, content=observation, tool_call_id=call.id))
 
         return self._finish(task_id, provider, model, steps, TerminationReason.STEP_LIMIT)
+
+    def _observe_provider_fault(
+        self, task_id: str, step_index: int, provider: str, model: str
+    ) -> str | None:
+        """Read-only: asks `self._fault_injector` (if set) whether a
+        PROVIDER-category fault would fire for this exact step, purely to
+        attribute it on the resulting `AgentStep.fault_id`. Never applies
+        anything — `FaultInjector.faults_for` is a pure function of its
+        inputs, so calling it here changes nothing about what a
+        `FaultyProvider`-wrapped `Runtime` provider independently decides
+        and applies for the same step (see this module's docstring for why
+        that requires the caller to pass the same injector to both)."""
+        if self._fault_injector is None:
+            return None
+        events = self._fault_injector.faults_for(
+            task_id=task_id, step=step_index, provider=provider, model=model
+        )
+        provider_events = [e for e in events if e.category == FaultCategory.PROVIDER]
+        return provider_events[0].fault_id if provider_events else None
 
     def _run_tool(
         self, tool: Tool[Any], args: Any, task_id: str, step_index: int, tool_name: str

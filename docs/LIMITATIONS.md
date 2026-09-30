@@ -159,15 +159,36 @@ stronger claims than the evidence supports.
   its threshold affects the outcome. This is a deliberate simplicity tradeoff (see
   "no magic composite score" in the design goal), not an oversight, but it does mean
   the four-tier classification is coarser than the raw signals it's built from.
-- **`AgentStep.recovery_action` is unused in Phase E.** The field exists (reserved
-  since Commit 25) for a future mid-trajectory recovery integration where
-  `AgentExecutor` would consult a `RecoveryPolicy` after a failed step instead of
-  terminating `UNRECOVERABLE_FAILURE` immediately; Phase E only wires recovery at the
-  task level (`ClosedLoopExecutor`), never within a single agent trajectory's steps.
-  `AgentStep.fault_id` *is* wired (tool-level faults only — provider-level faults
-  reaching an agent step are visible in the resulting `TerminationReason`/response
-  error, but not linked back to their originating `FaultEvent`'s id on the step
-  itself unless the fault was a tool fault).
+- **PARTIALLY RESOLVED in Phase E.5**: `AgentStep.fault_id` was previously wired for
+  tool-level faults only; provider-level faults reaching an agent step were visible in
+  the resulting `TerminationReason`/response error but never linked back to their
+  originating `FaultEvent.fault_id`. Fixed: `AgentExecutor` now queries its own
+  `fault_injector` (when supplied) read-only, once per step, purely to attribute a
+  PROVIDER-category fault onto that step's `AgentStep.fault_id` — this never applies
+  the fault itself (a `FaultyProvider`-wrapped `Runtime` provider still does that,
+  independently) and never mutates anything, since `FaultInjector.faults_for` is a
+  pure function of its inputs. **The caveat this creates, stated plainly and tested**
+  (`test_mismatched_injector_never_falsely_attributes_a_provider_fault`): the observed
+  attribution is only correct if the *same* injector (same policies, same seed) is
+  passed to both `AgentExecutor(fault_injector=...)` and the `FaultyProvider` actually
+  wrapping the provider — passing a different one produces a confidently-wrong
+  `fault_id` rather than an error, because the executor has no way to know the two
+  don't match. Every caller in this repo that uses both (see
+  `test_agent_executor.py`'s attribution test) passes one shared injector to both
+  places; a future caller that doesn't will get silently incorrect attribution, not a
+  loud failure — worth keeping in mind if this pattern is reused elsewhere.
+- **`AgentStep.recovery_action` remains unused, deliberately left unresolved in
+  Phase E.5.** The field exists (reserved since Commit 25) for a future
+  mid-trajectory recovery integration where `AgentExecutor` would consult a
+  `RecoveryPolicy` after a failed step instead of terminating
+  `UNRECOVERABLE_FAILURE` immediately. Populating it meaningfully is a genuine new
+  *capability* — a second, trajectory-scoped recovery control flow parallel to
+  `ClosedLoopExecutor`'s task-scoped one, with its own design questions (does a
+  mid-trajectory fallback restart the conversation on a new model? does message
+  history transfer cleanly across providers?) — not a field-population task, and the
+  Phase E.5 pass this entry belongs to was explicitly scoped to close experimental-
+  validity gaps, not expand product scope. Left for a future phase rather than forced
+  in here.
 - **Wall-clock latency is not part of the determinism guarantee.** Every
   seed-derived field (success/failure, recovery actions taken, attempt counts, costs,
   candidate selections) is bit-for-bit reproducible across independent process runs
