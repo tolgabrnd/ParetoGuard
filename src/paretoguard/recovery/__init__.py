@@ -18,6 +18,11 @@ from paretoguard.recovery.context import (
 )
 from paretoguard.recovery.escalation import QUALITY_FAILURE_CATEGORIES, should_escalate
 from paretoguard.recovery.fallback import FallbackPolicy, FallbackSelection, select_fallback
+from paretoguard.recovery.health import (
+    RecoveryHealthPolicy,
+    RecoveryHealthStatus,
+    classify_recovery_health,
+)
 from paretoguard.recovery.policy import RecoveryPolicy
 from paretoguard.recovery.retry import RecoveryRetryPolicy
 
@@ -33,8 +38,11 @@ __all__ = [
     "RecoveryAction",
     "RecoveryContext",
     "RecoveryDecision",
+    "RecoveryHealthPolicy",
+    "RecoveryHealthStatus",
     "RecoveryPolicy",
     "RecoveryRetryPolicy",
+    "classify_recovery_health",
     "select_fallback",
     "should_escalate",
 ]

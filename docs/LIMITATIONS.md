@@ -111,14 +111,25 @@ stronger claims than the evidence supports.
   `escalation_rate == 0.0` in every row of the flagship comparison is expected, not a
   defect. A future suite would need to inject `FailureCategory.SCHEMA_FAILURE`/
   `INVALID_OUTPUT`/`REASONING_FAILURE`-shaped faults to exercise it end-to-end.
-- **`RecoveryPolicy.decide` does not read `RecoveryContext.health_snapshots`.**
-  `ClosedLoopExecutor` populates it on every call (and feeds `HealthTracker` on every
-  attempt), but the only health-*derived* signal the current `RecoveryPolicy`
-  implementation actually consults is `CircuitBreaker` state (`state_for`), which is
-  updated from the same success/failure stream but is a separate, coarser signal
-  (open/half-open/closed) than the rolling EMA `health_snapshots` carries. Wiring a
-  health-aware decision (e.g. preferring a fallback candidate with a better recent
-  success rate over routing order) is future work, not implemented in Phase E.
+- **RESOLVED in Phase E.5**: `RecoveryPolicy.decide` previously did not read
+  `RecoveryContext.health_snapshots` at all. `recovery.health.classify_recovery_health`
+  now advises `select_fallback`'s candidate *ordering* (demote DEGRADED, skip
+  UNHEALTHY unless it's the only option, never penalize UNKNOWN/cold-start) from four
+  explicit, independently-documented signals — EMA success rate, EMA timeout rate,
+  `HealthTracker.latency_drift_ratio` (now also snapshotted onto `RecoveryContext
+  .latency_drift`), and a consecutive-failure streak — combined through a documented
+  rule cascade, never a blended composite score. See `recovery.health`'s module
+  docstring for why this is deliberately narrower than both
+  `routing.reliability.ReliabilityAwareRouter` (initial-routing ranking on one signal)
+  and `CircuitBreaker` (hard state gating, left untouched as a separate abstraction).
+  **What's still a real limitation**: the four signals are combined by a fixed rule
+  order (cold-start check, then streak, then floor, then ceiling-with-flags), not a
+  tunable weighting — a candidate with a borderline EMA success rate and a mild
+  latency drift is always `DEGRADED`, never independently distinguishable from one
+  with a severe drift and a strong EMA, because neither signal's *magnitude* beyond
+  its threshold affects the outcome. This is a deliberate simplicity tradeoff (see
+  "no magic composite score" in the design goal), not an oversight, but it does mean
+  the four-tier classification is coarser than the raw signals it's built from.
 - **`AgentStep.recovery_action` is unused in Phase E.** The field exists (reserved
   since Commit 25) for a future mid-trajectory recovery integration where
   `AgentExecutor` would consult a `RecoveryPolicy` after a failed step instead of

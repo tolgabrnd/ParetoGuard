@@ -54,7 +54,7 @@ flowchart TD
 | `routing.resilience_benchmark` | Phase E flagship recovery-policy comparison: composes `chaos` + `recovery` + `routing.execution.ClosedLoopExecutor` + `evals` over `resilience_v1` | Tune the comparison to guarantee any config wins (see its own module docstring) |
 | `agents` | Tool-use loop, deterministic tools. Optionally consults a `chaos.FaultInjector` (constructor param) to inject tool-level faults — the one injection point it uniquely owns | Execute arbitrary code or shell |
 | `chaos` | Deterministic fault injection | Run unconditionally outside experiments |
-| `recovery` | Retry/fallback/circuit-breaker/escalation policy | Hide failures silently |
+| `recovery` | Retry/fallback/circuit-breaker/escalation policy. `recovery.health` (Phase E.5) advises fallback *ordering* from `HealthTracker` signals (EMA success/timeout rate, latency drift, consecutive-failure streak) — a separate, narrower mechanism from both `routing.reliability.ReliabilityAwareRouter` (initial-routing ranking) and `CircuitBreaker` (hard state gating) | Hide failures silently. Never hard-exclude a candidate on health alone — see `recovery.health`'s module docstring |
 | `telemetry` | Trace events, rolling health metrics | Persist directly to disk (delegates to storage) |
 | `storage` | DuckDB schema, migrations, export | Contain domain logic |
 | `statistics` | Confidence intervals, comparisons, regression | Be called from CLI/API handlers directly for business decisions |

@@ -13,8 +13,10 @@ from paretoguard.core.models import (
 from paretoguard.recovery.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from paretoguard.recovery.context import AttemptRecord, RecoveryAction, RecoveryContext
 from paretoguard.recovery.fallback import FallbackPolicy, select_fallback
+from paretoguard.recovery.health import RecoveryHealthPolicy
 from paretoguard.recovery.policy import RecoveryPolicy
 from paretoguard.recovery.retry import RecoveryRetryPolicy
+from paretoguard.telemetry.health import ModelHealth
 
 
 def _features():
@@ -192,6 +194,104 @@ def test_select_fallback_never_cycles_back_to_current_candidate() -> None:
     context = _context()  # current_model="model-a", no other candidates
     selection = select_fallback(context, candidates, FallbackPolicy())
     assert selection.candidate is None
+
+
+# -- select_fallback: health-aware ordering (Phase E.5) -----------------------
+
+
+def _degraded_health(request_count: int = 10, ema_success_rate: float = 0.3) -> ModelHealth:
+    return ModelHealth(
+        provider="mock",
+        model="model-b",
+        request_count=request_count,
+        success_count=int(request_count * ema_success_rate),
+        ema_success_rate=ema_success_rate,
+    )
+
+
+def test_health_unaware_fallback_prefers_original_routing_order() -> None:
+    """Sanity baseline: with health_policy=None (the health-blind default),
+    an unhealthy candidate earlier in `candidates` is still picked first —
+    proves the health-aware tests below are actually testing reordering,
+    not some other effect."""
+    context = _context(
+        health_snapshots={"mock:model-b": _degraded_health()},
+    )
+    selection = select_fallback(context, _candidates(), FallbackPolicy(), health_policy=None)
+    assert selection.candidate is not None
+    assert selection.candidate.name == "model-b"
+
+
+def test_health_aware_fallback_demotes_an_unhealthy_candidate() -> None:
+    """The required end-to-end proof at the select_fallback level: a
+    recently-degraded candidate (model-b, first in routing order) is passed
+    over in favor of a healthier one (model-c) purely due to health."""
+    context = _context(
+        health_snapshots={"mock:model-b": _degraded_health()},
+    )
+    selection = select_fallback(
+        context, _candidates(), FallbackPolicy(), health_policy=RecoveryHealthPolicy()
+    )
+    assert selection.candidate is not None
+    assert selection.candidate.name == "model-c"
+
+
+def test_health_aware_fallback_still_selects_unhealthy_candidate_as_last_resort() -> None:
+    """An UNHEALTHY candidate is demoted, never permanently excluded — if
+    nothing else is eligible, it's still selected."""
+    candidates = [ModelSpec(name="model-b", provider="mock", context_window=100_000)]
+    context = _context(
+        current_model="model-a",  # not in `candidates`, so model-b is the only option
+        health_snapshots={"mock:model-b": _degraded_health()},
+    )
+    selection = select_fallback(
+        context, candidates, FallbackPolicy(), health_policy=RecoveryHealthPolicy()
+    )
+    assert selection.candidate is not None
+    assert selection.candidate.name == "model-b"
+
+
+def test_health_aware_fallback_never_demotes_unknown_or_healthy_candidates() -> None:
+    """Cold-start (no health data) candidates are treated as fully usable,
+    not penalized relative to a confirmed-healthy one."""
+    context = _context(
+        health_snapshots={
+            "mock:model-b": ModelHealth(
+                provider="mock",
+                model="model-b",
+                request_count=10,
+                success_count=10,
+                ema_success_rate=1.0,
+            )
+        }
+    )
+    # model-c has no health data at all (cold start) but is not in the snapshot;
+    # model-b is confirmed healthy. Original order (b before c) should hold.
+    selection = select_fallback(
+        context, _candidates(), FallbackPolicy(), health_policy=RecoveryHealthPolicy()
+    )
+    assert selection.candidate is not None
+    assert selection.candidate.name == "model-b"
+
+
+def test_health_aware_fallback_uses_latency_drift_snapshot() -> None:
+    context = _context(
+        health_snapshots={
+            "mock:model-b": ModelHealth(
+                provider="mock",
+                model="model-b",
+                request_count=10,
+                success_count=10,
+                ema_success_rate=0.95,
+            )
+        },
+        latency_drift={"mock:model-b": 5.0},  # well above the default 2.0 threshold
+    )
+    selection = select_fallback(
+        context, _candidates(), FallbackPolicy(), health_policy=RecoveryHealthPolicy()
+    )
+    assert selection.candidate is not None
+    assert selection.candidate.name == "model-c"  # model-b demoted despite high success rate
 
 
 # -- RecoveryPolicy (end to end decisions) ------------------------------------

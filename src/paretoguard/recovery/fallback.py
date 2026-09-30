@@ -1,5 +1,6 @@
 """Fallback candidate selection: which *different* candidate to try next,
-respecting eligibility, budget, prior attempts, and circuit state.
+respecting eligibility, budget, prior attempts, circuit state, and (Phase
+E.5) rolling health.
 
 Deliberately reuses `paretoguard.routing.types.filter_eligible` for the
 hard-constraint check (context window, structured-output/tool support,
@@ -12,7 +13,19 @@ from dataclasses import dataclass
 from paretoguard.core.models import InferenceRequest, Message, ModelSpec, Role
 from paretoguard.recovery.circuit_breaker import CircuitBreaker, CircuitState
 from paretoguard.recovery.context import RecoveryContext
+from paretoguard.recovery.health import (
+    RecoveryHealthPolicy,
+    RecoveryHealthStatus,
+    classify_recovery_health,
+)
 from paretoguard.routing.types import RoutingRequest, candidate_key, filter_eligible
+
+_HEALTH_RANK: dict[RecoveryHealthStatus, int] = {
+    RecoveryHealthStatus.HEALTHY: 0,
+    RecoveryHealthStatus.UNKNOWN: 1,
+    RecoveryHealthStatus.DEGRADED: 2,
+    RecoveryHealthStatus.UNHEALTHY: 3,
+}
 
 
 @dataclass(frozen=True)
@@ -42,13 +55,19 @@ def select_fallback(
     policy: FallbackPolicy,
     *,
     circuit_breaker: CircuitBreaker | None = None,
+    health_policy: RecoveryHealthPolicy | None = None,
 ) -> FallbackSelection:
     """Picks the next candidate to try: the first hard-eligible, not-yet-
-    attempted-in-this-chain, not-circuit-OPEN candidate, in the given order.
-    A candidate whose circuit is HALF_OPEN is still selectable (as a probe,
-    `is_probe=True`) — a circuit breaker's whole point is to occasionally
-    let a probe through; refusing it here would defeat that. Returns
-    `candidate=None` if depth is exhausted or nothing remains.
+    attempted-in-this-chain, not-circuit-OPEN candidate, in health-tier
+    order (HEALTHY/UNKNOWN first, then DEGRADED, then UNHEALTHY last —
+    see `recovery.health`'s module docstring; original relative order is
+    preserved *within* each tier via a stable sort). A candidate whose
+    circuit is HALF_OPEN is still selectable (as a probe, `is_probe=True`)
+    — a circuit breaker's whole point is to occasionally let a probe
+    through; refusing it here would defeat that. Returns `candidate=None`
+    if depth is exhausted or nothing remains. `health_policy=None` (the
+    default) disables health-tier reordering entirely, preserving the exact
+    pre-Phase-E.5 behavior for callers that don't opt in.
     """
     attempted_keys = {candidate_key(a.provider, a.model) for a in context.attempted}
     if context.current_key() is not None:
@@ -84,6 +103,9 @@ def select_fallback(
     )
     eligible, excluded = filter_eligible(routing_request)
 
+    if health_policy is not None:
+        eligible = _order_by_health(eligible, context, health_policy)
+
     for candidate in eligible:
         key = candidate_key(candidate.provider, candidate.name)
         if key in attempted_keys:
@@ -99,3 +121,23 @@ def select_fallback(
         return FallbackSelection(candidate=candidate, is_probe=False, excluded=excluded)
 
     return FallbackSelection(candidate=None, is_probe=False, excluded=excluded)
+
+
+def _order_by_health(
+    eligible: list[ModelSpec], context: RecoveryContext, policy: RecoveryHealthPolicy
+) -> list[ModelSpec]:
+    """Stable-sorts `eligible` by health tier (ascending `_HEALTH_RANK`),
+    preserving original relative order within a tier. An UNHEALTHY candidate
+    sorts last but is never removed — if it's the only one left once the
+    main loop's attempted/circuit-state checks run, it's still selected
+    (see `select_fallback`'s docstring: demotion and last-resort skipping,
+    never permanent exclusion)."""
+
+    def rank(candidate: ModelSpec) -> int:
+        key = candidate_key(candidate.provider, candidate.name)
+        status = classify_recovery_health(
+            context.health_snapshots.get(key), context.latency_drift.get(key), policy
+        )
+        return _HEALTH_RANK[status]
+
+    return sorted(eligible, key=rank)

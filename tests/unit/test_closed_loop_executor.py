@@ -23,6 +23,7 @@ from paretoguard.evals.models import EvalCase, GraderConfig, GraderKind, GroundT
 from paretoguard.providers.base import Provider
 from paretoguard.recovery.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitState
 from paretoguard.recovery.fallback import FallbackPolicy
+from paretoguard.recovery.health import RecoveryHealthPolicy
 from paretoguard.recovery.policy import RecoveryPolicy
 from paretoguard.recovery.retry import RecoveryRetryPolicy
 from paretoguard.routing.escalation import EscalationRouter
@@ -145,6 +146,43 @@ async def test_recovers_via_fallback_after_transient_failure() -> None:
     assert outcome.final_model == "model-b"
     assert outcome.attempt_count == 2
     assert outcome.recovery_actions == ["fallback_model"]
+
+
+async def test_recently_degraded_candidate_is_less_likely_chosen_as_fallback() -> None:
+    """End-to-end health-aware recovery proof (Phase E.5): model-b is
+    earlier in candidate order than model-c and *would* succeed if picked,
+    but its pre-seeded rolling health is badly degraded — the executor must
+    prefer the healthier model-c instead, purely from automatic health
+    feedback, with no explicit instruction to avoid model-b."""
+    provider = _KeyedScriptedProvider(
+        "mock",
+        {"model-a": [_fail()], "model-b": [_ok("answer")], "model-c": [_ok("answer")]},
+    )
+    tracker = HealthTracker()
+    for _ in range(10):
+        tracker.record_outcome(
+            "mock",
+            "model-b",
+            succeeded=False,
+            latency_ms=1.0,
+            error_category=FailureCategory.PROVIDER_FAILURE,
+        )
+    router = StaticRouter(provider="mock", model="model-a")
+    policy = RecoveryPolicy(
+        retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0),
+        health_policy=RecoveryHealthPolicy(),
+    )
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=policy,
+        health_tracker=tracker,
+        retry_policy=_NO_RUNTIME_RETRY,
+    )
+    result, outcome = await executor.execute(_case())
+    assert result.succeeded
+    assert outcome.final_model == "model-c"
 
 
 async def test_retries_same_candidate_before_falling_back() -> None:

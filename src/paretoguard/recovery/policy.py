@@ -19,6 +19,14 @@ state-mutating `allow_request`, which is reserved for the actual dispatch
 point once a decision has been made — see `recovery.fallback`'s use of the
 same read-only check). This keeps `HealthTracker`/`CircuitBreaker` reusable
 by other consumers without this policy being tightly coupled to either.
+
+**Health-aware fallback ordering (Phase E.5)**: `health_policy` (on by
+default) is passed straight through to `select_fallback`, which uses it
+only to *order* eligible fallback candidates (demote/skip, never hard-
+exclude) — see `recovery.health`'s module docstring for why this is a
+separate, narrower mechanism than `routing.reliability.ReliabilityAwareRouter`
+and than `CircuitBreaker`. Pass `health_policy=None` to disable it and
+restore pre-Phase-E.5 health-blind fallback ordering.
 """
 
 from dataclasses import dataclass, field
@@ -28,6 +36,7 @@ from paretoguard.recovery.circuit_breaker import CircuitBreaker, CircuitState
 from paretoguard.recovery.context import RecoveryAction, RecoveryContext, RecoveryDecision
 from paretoguard.recovery.escalation import should_escalate
 from paretoguard.recovery.fallback import FallbackPolicy, select_fallback
+from paretoguard.recovery.health import RecoveryHealthPolicy
 from paretoguard.recovery.retry import RecoveryRetryPolicy
 
 
@@ -37,6 +46,7 @@ class RecoveryPolicy:
     fallback_policy: FallbackPolicy = field(default_factory=FallbackPolicy)
     circuit_breaker: CircuitBreaker | None = None
     allow_escalation: bool = True
+    health_policy: RecoveryHealthPolicy | None = field(default_factory=RecoveryHealthPolicy)
 
     def decide(self, context: RecoveryContext, candidates: list[ModelSpec]) -> RecoveryDecision:
         if self._budget_exhausted(context):
@@ -66,7 +76,11 @@ class RecoveryPolicy:
                 )
 
         selection = select_fallback(
-            context, candidates, self.fallback_policy, circuit_breaker=self.circuit_breaker
+            context,
+            candidates,
+            self.fallback_policy,
+            circuit_breaker=self.circuit_breaker,
+            health_policy=self.health_policy,
         )
         if selection.candidate is None:
             action = RecoveryAction.FAIL if permanent else RecoveryAction.ABSTAIN

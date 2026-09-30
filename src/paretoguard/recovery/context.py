@@ -64,6 +64,11 @@ class RecoveryContext:
     remaining_latency_budget_ms: float | None = None
     health_snapshots: dict[str, ModelHealth] = field(default_factory=dict)
     """Keyed by `candidate_key(provider, model)` — see `routing.types`."""
+    latency_drift: dict[str, float] = field(default_factory=dict)
+    """Keyed by `candidate_key(provider, model)` — `HealthTracker
+    .latency_drift_ratio` per candidate, a separate snapshot from
+    `health_snapshots` because it isn't part of `ModelHealth` itself (see
+    `recovery.health`'s module docstring for how it's used)."""
     circuit_snapshots: dict[str, CircuitSnapshot] = field(default_factory=dict)
     constraints: RoutingConstraints = field(default_factory=RoutingConstraints)
 

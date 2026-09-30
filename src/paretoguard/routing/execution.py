@@ -455,6 +455,7 @@ class ClosedLoopExecutor:
                 task_features=features,
                 attempted=tuple(attempted[:-1]),
                 health_snapshots=self._health_snapshot(),
+                latency_drift=self._latency_drift_snapshot(),
                 circuit_snapshots=self._circuit_breaker.all_snapshots()
                 if self._circuit_breaker
                 else {},
@@ -550,4 +551,14 @@ class ClosedLoopExecutor:
             health = self._health_tracker.get(candidate.provider, candidate.name)
             if health is not None:
                 snapshot[candidate_key(candidate.provider, candidate.name)] = health
+        return snapshot
+
+    def _latency_drift_snapshot(self) -> dict[str, float]:
+        if self._health_tracker is None:
+            return {}
+        snapshot: dict[str, float] = {}
+        for candidate in self._candidates:
+            drift = self._health_tracker.latency_drift_ratio(candidate.provider, candidate.name)
+            if drift is not None:
+                snapshot[candidate_key(candidate.provider, candidate.name)] = drift
         return snapshot
