@@ -109,8 +109,37 @@ stronger claims than the evidence supports.
 - **`resilience_v1` injects no quality-category faults**, so `RecoveryAction.ESCALATE`
   is exercised by unit tests (`test_recovery_policy.py`) but not by this benchmark —
   `escalation_rate == 0.0` in every row of the flagship comparison is expected, not a
-  defect. A future suite would need to inject `FailureCategory.SCHEMA_FAILURE`/
-  `INVALID_OUTPUT`/`REASONING_FAILURE`-shaped faults to exercise it end-to-end.
+  defect, and remains true after the Phase E.5 fix below (verified unchanged:
+  `resilience_v1` still only injects transient/provider-category faults). See
+  `routing.escalation_benchmark` (Phase E.5) for the scenario that does exercise it.
+- **RESOLVED in Phase E.5, and a deeper bug than originally stated**: the paragraph
+  above previously ended with "a future suite would need to inject quality-shaped
+  faults to exercise escalation end-to-end" — true, but incomplete. Actually building
+  that suite surfaced a real architectural gap: `ClosedLoopExecutor` graded the
+  *final* response only, at the very end of the loop. Any transport-successful
+  response — right or wrong — was treated as terminal success the instant it arrived,
+  so `RecoveryAction.ESCALATE` could never fire through the real closed-loop path no
+  matter what a benchmark injected; a quality-shaped fault would have been silently
+  accepted as "success" mid-loop. Fixed: `ClosedLoopExecutor` now grades every attempt
+  in-loop by default (`validate_quality=True`), classifying a failed grade into
+  `FailureCategory.SCHEMA_FAILURE` (JSON_SCHEMA-graded cases) or `INVALID_OUTPUT`
+  (every other grader kind — a deterministic grader has no basis to distinguish
+  `REASONING_FAILURE` from a generic wrong answer, so this repo never fabricates that
+  distinction) and feeding it through the same recovery path a transport failure uses.
+  `validate_quality=False` restores the exact old behavior, specifically so
+  `routing.escalation_benchmark` can compare the two directly.
+
+  **Actual results** (`routing.escalation_benchmark`, 20 JSON-schema tasks, 60%
+  quality-fault rate on one candidate, verified reproducible): the `no_validation` arm
+  reaches 0.350 task success (13/20 permanently wrong, `escalation_rate=0.0`, every
+  unrecovered failure's category reads `"unknown"` — the arm never even classified
+  *why* it failed, since it never looked); the `validation_and_escalation` arm reaches
+  1.000 task success, `escalation_rate=0.65`, zero unrecovered failures, at a real,
+  reported cost of +0.65 average attempts per task (added latency was negligible
+  against `MockProvider`, as expected — real-provider latency would differ and is not
+  claimed here). This is the honest, non-trivial demonstration the Phase E.5 spec
+  asked for: validating and escalating on quality failures has a real, positive,
+  measured effect through the actual closed-loop path, at a real, measured cost.
 - **RESOLVED in Phase E.5**: `RecoveryPolicy.decide` previously did not read
   `RecoveryContext.health_snapshots` at all. `recovery.health.classify_recovery_health`
   now advises `select_fallback`'s candidate *ordering* (demote DEGRADED, skip

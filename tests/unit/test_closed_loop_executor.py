@@ -148,6 +148,99 @@ async def test_recovers_via_fallback_after_transient_failure() -> None:
     assert outcome.recovery_actions == ["fallback_model"]
 
 
+async def test_quality_failure_is_detected_and_recovered_via_fallback() -> None:
+    """The Phase E.5 fix: a transport-successful-but-wrong-answer response
+    must not be treated as terminal success — it should be graded in-loop,
+    classified as a quality failure, and trigger recovery."""
+    provider = _KeyedScriptedProvider(
+        "mock", {"model-a": [_ok("wrong-answer")], "model-b": [_ok("answer")]}
+    )
+    router = StaticRouter(provider="mock", model="model-a")
+    policy = RecoveryPolicy(
+        retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0),
+        fallback_policy=FallbackPolicy(max_fallback_depth=2),
+        allow_escalation=False,
+    )
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=policy,
+        retry_policy=_NO_RUNTIME_RETRY,
+    )
+    result, outcome = await executor.execute(_case())
+    assert result.succeeded
+    assert outcome.attempt_count == 2
+    assert outcome.final_model == "model-b"
+    assert outcome.recovery_actions == ["fallback_model"]
+
+
+async def test_quality_failure_escalates_when_escalation_enabled() -> None:
+    provider = _KeyedScriptedProvider(
+        "mock", {"model-a": [_ok("wrong-answer")], "model-b": [_ok("answer")]}
+    )
+    router = StaticRouter(provider="mock", model="model-a")
+    policy = RecoveryPolicy(
+        retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0),
+        fallback_policy=FallbackPolicy(max_fallback_depth=2),
+        allow_escalation=True,
+    )
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=policy,
+        retry_policy=_NO_RUNTIME_RETRY,
+    )
+    result, outcome = await executor.execute(_case())
+    assert result.succeeded
+    assert outcome.recovery_actions == ["escalate"]
+
+
+async def test_quality_failure_counts_as_a_failure_for_health_tracking() -> None:
+    provider = _KeyedScriptedProvider(
+        "mock", {"model-a": [_ok("wrong-answer")], "model-b": [_ok("answer")]}
+    )
+    router = StaticRouter(provider="mock", model="model-a")
+    policy = RecoveryPolicy(retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0))
+    tracker = HealthTracker()
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=policy,
+        health_tracker=tracker,
+        retry_policy=_NO_RUNTIME_RETRY,
+    )
+    await executor.execute(_case())
+    health = tracker.get("mock", "model-a")
+    assert health is not None
+    assert health.success_count == 0  # the wrong answer must not count as a success
+    assert health.request_count == 1
+
+
+async def test_validate_quality_false_restores_pre_e5_behavior() -> None:
+    """With validate_quality=False, a wrong-but-transport-successful answer
+    is treated as terminal success (the pre-Phase-E.5 behavior) — recovery
+    is never invoked, even though the final EvalResult still correctly
+    grades it as failed (grading happens unconditionally at the end)."""
+    provider = _KeyedScriptedProvider("mock", {"model-a": [_ok("wrong-answer")]})
+    router = StaticRouter(provider="mock", model="model-a")
+    policy = RecoveryPolicy(retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0))
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=policy,
+        retry_policy=_NO_RUNTIME_RETRY,
+        validate_quality=False,
+    )
+    result, outcome = await executor.execute(_case())
+    assert outcome.attempt_count == 1  # never recovered: treated as success in-loop
+    assert outcome.recovery_actions == []
+    assert not result.succeeded  # the final EvalResult still grades it correctly
+
+
 async def test_recently_degraded_candidate_is_less_likely_chosen_as_fallback() -> None:
     """End-to-end health-aware recovery proof (Phase E.5): model-b is
     earlier in candidate order than model-c and *would* succeed if picked,

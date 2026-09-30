@@ -45,6 +45,7 @@ from paretoguard.core.config import PricingTable
 from paretoguard.core.features import extract_task_features
 from paretoguard.core.ids import deterministic_request_id
 from paretoguard.core.models import (
+    FailureCategory,
     InferenceRequest,
     ModelSpec,
     OutcomeEvent,
@@ -54,7 +55,7 @@ from paretoguard.core.models import (
     TraceEventType,
 )
 from paretoguard.evals.graders import grade_case
-from paretoguard.evals.models import EvalCase, EvalResult, EvalSuite
+from paretoguard.evals.models import EvalCase, EvalResult, EvalSuite, GraderKind
 from paretoguard.evals.runner import BenchmarkConfig
 from paretoguard.providers.base import Provider
 from paretoguard.recovery.circuit_breaker import CircuitBreaker
@@ -279,6 +280,21 @@ class RoutedBenchmarkRunner:
 _TERMINAL_RECOVERY_ACTIONS = frozenset({RecoveryAction.ABSTAIN, RecoveryAction.FAIL})
 
 
+def _quality_failure_category(case: EvalCase) -> FailureCategory:
+    """Classifies a *failed grade* on an otherwise transport-successful
+    response (Phase E.5) into one of `recovery.escalation
+    .QUALITY_FAILURE_CATEGORIES`, so `RecoveryPolicy` can actually escalate
+    on it. `JSON_SCHEMA`-graded cases that fail grading are
+    `SCHEMA_FAILURE` (the structured output didn't validate against the
+    case's own schema) — every other grader kind is `INVALID_OUTPUT`. A
+    deterministic grader only knows the output didn't match, not *why*; it
+    has no basis to distinguish `REASONING_FAILURE` from a generic wrong
+    answer, so this never returns it (see docs/LIMITATIONS.md)."""
+    if case.grader.kind == GraderKind.JSON_SCHEMA:
+        return FailureCategory.SCHEMA_FAILURE
+    return FailureCategory.INVALID_OUTPUT
+
+
 class ClosedLoopExecutor:
     """The Phase E control plane:
 
@@ -315,6 +331,7 @@ class ClosedLoopExecutor:
         pricing_table: PricingTable | None = None,
         profiles: dict[str, CandidateProfile] | None = None,
         max_attempts: int = 5,
+        validate_quality: bool = True,
     ) -> None:
         missing = {c.provider for c in candidates} - set(providers)
         if missing:
@@ -330,6 +347,7 @@ class ClosedLoopExecutor:
         self._store = store
         self._profiles = dict(profiles or {})
         self._max_attempts = max_attempts
+        self._validate_quality = validate_quality
         self._runtimes = {
             name: Runtime(
                 provider,
@@ -430,13 +448,45 @@ class ClosedLoopExecutor:
             step_cost = response.cost.total_cost_usd if response.cost else None
             total_cost += step_cost or 0.0
             total_latency += response.latency.total_latency_ms
-            succeeded = response.succeeded
-            failure_category = response.error.category if response.error else None
             final_response = response
 
+            # A transport-successful response can still be the *wrong*
+            # answer — grade it here (not just at the very end), when
+            # `validate_quality` is enabled (the default), so a quality
+            # failure (malformed structured output, wrong answer, ...) is
+            # visible to recovery at all. Without this, any response the
+            # provider returned without erroring was treated as terminal
+            # success regardless of content, and RecoveryAction.ESCALATE
+            # (which exists specifically for quality-category failures)
+            # could never actually fire through this loop — see
+            # docs/LIMITATIONS.md's Phase E.5 section. `validate_quality=
+            # False` restores that pre-Phase-E.5 behavior deliberately, so
+            # `routing.escalation_benchmark` can compare the two directly
+            # through this same real closed-loop path rather than just
+            # unit-testing `should_escalate` in isolation.
+            if response.succeeded and self._validate_quality:
+                succeeded = grade_case(case, response).succeeded
+                failure_category = None if succeeded else _quality_failure_category(case)
+            else:
+                succeeded = response.succeeded
+                failure_category = response.error.category if response.error else None
+
             # --- automatic closed-loop feedback (never left to a caller) ---
+            # Uses the *effective* (grading-aware) outcome, not raw
+            # response.succeeded — a quality failure must count as a
+            # failure for health/circuit-breaker purposes too, the same way
+            # a transport failure does.
             if self._health_tracker is not None:
-                self._health_tracker.record_response(response)
+                if response.succeeded and not succeeded:
+                    self._health_tracker.record_outcome(
+                        current_provider,
+                        current_model,
+                        succeeded=False,
+                        latency_ms=response.latency.total_latency_ms,
+                        error_category=failure_category,
+                    )
+                else:
+                    self._health_tracker.record_response(response)
             key = candidate_key(current_provider, current_model)
             if self._circuit_breaker is not None:
                 if succeeded:

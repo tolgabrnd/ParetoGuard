@@ -62,7 +62,7 @@ optional path — never silently mixed into either of the above.
 | `evals.runner.BenchmarkRunner` | Fixed (provider, model) | None | A single model's raw performance on a suite |
 | `evals.matrix.MatrixRunner` | Every candidate, every task | None | Offline training-matrix generation for learned routers |
 | `routing.execution.RoutedBenchmarkRunner` | One `Router` decision per task | None | A router's live selection behavior on a suite |
-| `routing.execution.ClosedLoopExecutor` | One `Router` decision, then `RecoveryPolicy`-driven | Automatic retry/fallback/escalate/probe/abstain | Phase E: the resilience/recovery comparison |
+| `routing.execution.ClosedLoopExecutor` | One `Router` decision, then `RecoveryPolicy`-driven | Automatic retry/fallback/escalate/probe/abstain. Grades every attempt in-loop by default (`validate_quality=True`, Phase E.5) — a transport-successful-but-wrong response is a quality failure recovery can act on, not silent terminal success | Phase E: the resilience/recovery comparison; Phase E.5: `routing.escalation_benchmark` |
 | `agents.executor.AgentExecutor` via `agents.simulator.AgentSimulator` | N/A (agent tasks are provider/model-fixed per batch) | Tool-level chaos only (Phase E); no mid-trajectory recovery yet (see `docs/LIMITATIONS.md`) | `structured_agent_v1` |
 
 ## Metrics
