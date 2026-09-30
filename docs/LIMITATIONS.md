@@ -157,4 +157,46 @@ stronger claims than the evidence supports.
   so there is nothing to retract, but a reader diffing this commit against Commit 27's
   original `fallback.py` should not assume the old behavior was equivalent.
 
+### Phase E.5 specifics (2026-09-30)
+
+- **The sustained-outage scenario (`routing.sustained_outage_benchmark`) shows what
+  `resilience_v1`'s i.i.d. fault model structurally could not.** At default parameters
+  (300 steps, one provider degraded to 85% failure for steps 100-199, two healthy
+  baseline providers throughout), the actual observed numbers: `A-no_recovery`'s
+  success rate *during the outage window* collapses to 0.190 (consistent with ~15%
+  expected success at 85% failure); `B-retry_only` partially compensates, reaching
+  0.480 — still failing more than half the time, because retrying the *same* degraded
+  candidate up to 3 total times against an 85%-failure stream is not enough;
+  `C-retry_fallback`, `D-retry_fallback_circuit_breaker`, and `E-full_policy` all
+  reach 1.000 outage-window success by switching to a healthy backup provider. This is
+  the honest confirmation `resilience_benchmark`'s own docstring predicted would *not*
+  show up under i.i.d. faults: fallback meaningfully beats retry-only specifically
+  under a correlated/sustained failure, not a momentary one.
+- **Circuit breaker's benefit here shows up as efficiency, not success rate.** `D`
+  and `E` tie `C`'s 1.000 outage success but do it in fewer average attempts (1.29 vs.
+  1.48) — the breaker opened 4 times across the 300-step run, each time avoiding a
+  wasted retry/probe against the degraded primary that fallback-only (`C`) would still
+  have attempted once per task. Reported plainly rather than inflated into "the
+  breaker improves success," which the numbers do not support here.
+- **`time_to_recover` measures something narrower than it sounds.** Every simulated
+  "step" in this scenario is an independent task with its own fresh `StaticRouter`
+  decision (always the primary) — there is no cross-task "currently avoiding the
+  primary" state outside of `CircuitBreaker`'s own OPEN/HALF_OPEN gating. So
+  `time_to_recover == 0` for every fallback-capable config in the default run does not
+  mean "recovery is instant/trivial" — it means the first post-outage task's *first
+  attempt* at the primary already succeeds (the fault schedule itself has already
+  returned to 1% baseline), and by then `CircuitBreaker`'s cooldown (5 virtual
+  seconds, many cycles within the 100-step outage) has typically already let the
+  primary back in well before `recovered_start`. This is a real, honest property of
+  the per-task routing design (Commit 28: "the router decides once per task"), not a
+  benchmark artifact to paper over — a future scenario that wants to observe a
+  *slower*, state-carrying recovery would need a router/executor design with
+  cross-task "recently avoided" memory, which this repo does not have.
+- **A deterministic virtual clock, not the real one, drives `CircuitBreaker.cooldown_s`
+  in this scenario** (`clock=lambda: virtual_clock["t"]`, one virtual second per
+  simulated step) — reusing `CircuitBreaker`'s existing injectable-clock design. Using
+  the real `time.monotonic` clock here would make cooldown/probe timing depend on how
+  fast this process happens to execute 300 simulated steps (well under a second),
+  making the result non-reproducible in a way unrelated to the scenario itself.
+
 This file will grow with specific, dated entries as each subsystem is implemented.

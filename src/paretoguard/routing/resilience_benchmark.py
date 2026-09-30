@@ -49,6 +49,7 @@ to exercise it; an escalation_rate of 0.0 in this benchmark's output is
 expected, not a defect.
 """
 
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -156,8 +157,12 @@ def _retry_fallback() -> tuple[RecoveryPolicy, CircuitBreaker | None]:
     )
 
 
-def _retry_fallback_circuit_breaker() -> tuple[RecoveryPolicy, CircuitBreaker | None]:
-    breaker = CircuitBreaker(CircuitBreakerConfig(failure_threshold=2, cooldown_s=5.0))
+def _retry_fallback_circuit_breaker(
+    clock: Callable[[], float] | None = None,
+) -> tuple[RecoveryPolicy, CircuitBreaker | None]:
+    breaker = CircuitBreaker(
+        CircuitBreakerConfig(failure_threshold=2, cooldown_s=5.0), clock=clock or time.monotonic
+    )
     return (
         RecoveryPolicy(
             retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=1),
@@ -169,8 +174,12 @@ def _retry_fallback_circuit_breaker() -> tuple[RecoveryPolicy, CircuitBreaker | 
     )
 
 
-def _full_policy() -> tuple[RecoveryPolicy, CircuitBreaker | None]:
-    breaker = CircuitBreaker(CircuitBreakerConfig(failure_threshold=2, cooldown_s=5.0))
+def _full_policy(
+    clock: Callable[[], float] | None = None,
+) -> tuple[RecoveryPolicy, CircuitBreaker | None]:
+    breaker = CircuitBreaker(
+        CircuitBreakerConfig(failure_threshold=2, cooldown_s=5.0), clock=clock or time.monotonic
+    )
     return (
         RecoveryPolicy(
             retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=1),
@@ -182,13 +191,26 @@ def _full_policy() -> tuple[RecoveryPolicy, CircuitBreaker | None]:
     )
 
 
-def recovery_config_specs() -> list[RecoveryConfigSpec]:
+def recovery_config_specs(clock: Callable[[], float] | None = None) -> list[RecoveryConfigSpec]:
     """The five points of the flagship comparison, in the order the Phase E
     spec names them. `max_attempts` is set per config to exactly the room
     its own policy could ever use (1 initial + retry budget, or 1 initial +
     retry budget per candidate across the full fallback depth) — a config
     is never handicapped by `ClosedLoopExecutor`'s own hard cap running out
-    before its *policy's* budget would."""
+    before its *policy's* budget would.
+
+    `clock` (Phase E.5): passed through to the two circuit-breaker-enabled
+    configs' `CircuitBreaker`. `None` (the default here, used by
+    `run_resilience_benchmark`'s i.i.d.-fault comparison) means the real
+    `time.monotonic` clock — fine for that comparison, which runs in well
+    under a second of real wall-clock time regardless of fault level. A
+    multi-step scenario spanning a long *simulated* timeline (e.g.
+    `routing.sustained_outage_benchmark`) needs a deterministic virtual
+    clock instead — real wall-clock cooldown timing would otherwise depend
+    on how fast this process happens to execute, making circuit-breaker
+    cooldown/probe behavior non-reproducible and effectively untested across
+    the simulated timeline (300 simulated steps can execute in well under
+    the real cooldown_s)."""
     return [
         RecoveryConfigSpec(
             "A-no_recovery",
@@ -212,13 +234,13 @@ def recovery_config_specs() -> list[RecoveryConfigSpec]:
             "D-retry_fallback_circuit_breaker",
             "Same as C, plus a circuit breaker excluding a tripped candidate.",
             max_attempts=6,
-            build=_retry_fallback_circuit_breaker,
+            build=lambda: _retry_fallback_circuit_breaker(clock),
         ),
         RecoveryConfigSpec(
             "E-full_policy",
             "Same as D, plus escalation on quality-category failures.",
             max_attempts=6,
-            build=_full_policy,
+            build=lambda: _full_policy(clock),
         ),
     ]
 

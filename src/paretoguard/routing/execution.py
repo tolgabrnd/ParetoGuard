@@ -341,13 +341,25 @@ class ClosedLoopExecutor:
         }
 
     async def execute(
-        self, case: EvalCase, *, run_id: str | None = None
+        self, case: EvalCase, *, run_id: str | None = None, chaos_step_offset: int = 0
     ) -> tuple[EvalResult, OutcomeEvent]:
         """Runs one task through the full closed loop to a terminal
         `EvalResult` + `OutcomeEvent`. Never raises for an execution
         failure — an exhausted recovery chain is a normal `succeeded=False`
         result, not an exception (matching every other runner in this repo:
-        no case is ever silently dropped)."""
+        no case is ever silently dropped).
+
+        `chaos_step_offset` (Phase E.5): each attempt's request carries
+        `chaos_step = chaos_step_offset + attempt_number - 1` (default 0,
+        identical to the pre-E.5 behavior). A caller driving a *sequence* of
+        `execute()` calls that together represent one continuous timeline —
+        e.g. `routing.sustained_outage_benchmark`, where a `FaultInjector`'s
+        `StepRangeSchedule` needs `step` to mean "time since the scenario
+        began", not "attempt number within this one task" — passes the
+        outer timeline's own step index here so a single task's retries
+        still advance along that same timeline rather than always
+        restarting the schedule at 0.
+        """
         probe_request = InferenceRequest(
             task_id=case.case_id,
             provider="",
@@ -392,15 +404,21 @@ class ClosedLoopExecutor:
                     "provider": current_provider,
                     "model": current_model,
                     "request_id": request_id,
-                    # `chaos_step` = attempt_number - 1: lets a
-                    # `chaos.FaultyProvider`-wrapped provider draw an
+                    # `chaos_step` = chaos_step_offset + attempt_number - 1:
+                    # lets a `chaos.FaultyProvider`-wrapped provider draw an
                     # independent, still-reproducible fault decision per
                     # attempt (`FaultInjector` keys its RNG on
                     # (task_id, step, fault_id)) — without this, every retry
                     # of the same task would replay the exact same draw at
                     # step 0 and a retry could never observe a different
                     # outcome than the attempt it's retrying (Commit 29).
-                    "metadata": {**probe_request.metadata, "chaos_step": attempt_number - 1},
+                    # `chaos_step_offset` (Phase E.5) additionally lets a
+                    # caller driving a multi-task outer timeline keep that
+                    # timeline's own step meaning, see `execute`'s docstring.
+                    "metadata": {
+                        **probe_request.metadata,
+                        "chaos_step": chaos_step_offset + attempt_number - 1,
+                    },
                 }
             )
 
