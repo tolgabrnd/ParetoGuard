@@ -29,7 +29,7 @@ from paretoguard.core.models.inference import (
 from paretoguard.core.models.manifest import RunManifest
 from paretoguard.core.models.provider import ModelSpec, ProviderSpec
 from paretoguard.core.models.routing import RoutingConstraints, RoutingDecision
-from paretoguard.core.models.telemetry import TraceEvent, TraceEventType
+from paretoguard.core.models.telemetry import OutcomeEvent, TraceEvent, TraceEventType
 
 __all__ = [
     "CostBasis",
@@ -42,6 +42,7 @@ __all__ = [
     "LatencyRecord",
     "Message",
     "ModelSpec",
+    "OutcomeEvent",
     "PricingEntry",
     "ProviderKind",
     "ProviderSpec",
