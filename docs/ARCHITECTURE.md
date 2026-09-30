@@ -50,8 +50,9 @@ flowchart TD
 | `routing` | Select a model given constraints/health | Call providers directly |
 | `evals` | Task schemas, grading, benchmark orchestration | Assume a specific router |
 | `evals.matrix` | Offline: every candidate x every task, for learned-router training data | Assume a specific router (candidates are given, not chosen) |
-| `routing.execution` | **The one exception**: dispatches a `Router`'s `RoutingDecision` to the selected provider via `Runtime` | — (every other file in `routing` still must not call providers; only this one composes `routing` + `evals` + `runtime` for live router-driven benchmarking) |
-| `agents` | Tool-use loop, deterministic tools | Execute arbitrary code or shell |
+| `routing.execution` | **The one exception**: dispatches a `Router`'s `RoutingDecision` to the selected provider via `Runtime`. Also home to `ClosedLoopExecutor` (Phase E): the same dispatch responsibility, extended with automatic retry/fallback/escalate/probe/abstain via `recovery`, feeding every outcome back into `telemetry`/`recovery` without a caller having to close the loop manually | — (every other file in `routing` still must not call providers; only this one composes `routing` + `evals` + `runtime` + `recovery` for live router-driven benchmarking and closed-loop execution) |
+| `routing.resilience_benchmark` | Phase E flagship recovery-policy comparison: composes `chaos` + `recovery` + `routing.execution.ClosedLoopExecutor` + `evals` over `resilience_v1` | Tune the comparison to guarantee any config wins (see its own module docstring) |
+| `agents` | Tool-use loop, deterministic tools. Optionally consults a `chaos.FaultInjector` (constructor param) to inject tool-level faults — the one injection point it uniquely owns | Execute arbitrary code or shell |
 | `chaos` | Deterministic fault injection | Run unconditionally outside experiments |
 | `recovery` | Retry/fallback/circuit-breaker/escalation policy | Hide failures silently |
 | `telemetry` | Trace events, rolling health metrics | Persist directly to disk (delegates to storage) |
@@ -64,6 +65,16 @@ flowchart TD
 CLI and API are thin: they parse input, call into the library modules above, and
 format output. This keeps every capability usable both as a library and as a service.
 
+**Phase E addition**: `evals.metrics.compute_resilience_metrics` reads `RecoveryAction`
+string values (via a function-local import of `recovery.context`, not a module-level
+one — `recovery.context` transitively imports `routing.types`, and `routing/__init__.py`
+imports `evals.matrix`, so a module-level import here would cycle back to this file) and
+accepts an optional `average_tool_calls` computed from `agents.state.AgentTrajectory`s
+(`evals.metrics.mean_tool_call_count`) — `evals` metrics now read from `recovery`'s and
+`agents`' *typed output shapes* (`OutcomeEvent.recovery_actions`,
+`AgentTrajectory.tool_call_count`) without either of those modules depending back on
+`evals`.
+
 ## Data flow for a benchmark run
 
 1. A `BenchmarkRun` is created from an `EvalSuite` + `RunManifest` (captures git SHA,
@@ -75,7 +86,10 @@ format output. This keeps every capability usable both as a library and as a ser
 4. Providers return a normalized `InferenceResponse`; graders in `evals` compute an
    `EvalResult`.
 5. On failure, the `recovery` module decides retry/fallback/escalate/fail based on the
-   error taxonomy.
+   error taxonomy. For a `ClosedLoopExecutor`-driven run (Phase E), this repeats
+   automatically until a terminal outcome, and the whole chain is summarized as one
+   `OutcomeEvent` (`storage.ExperimentStore.record_outcome_event`) alongside the
+   per-attempt `requests`/`responses`/`trace_events` rows.
 6. Every step emits `TraceEvent`s to `telemetry`, which updates rolling `ModelHealth`
    and persists to the DuckDB `storage` layer.
 7. `reports` reads only from storage to produce Markdown/JSON/chart output — it never

@@ -3,6 +3,9 @@ control plane (routing -> execution -> recovery -> feedback)."""
 
 from uuid import uuid4
 
+from paretoguard.chaos.faults import ExpectedRecoverability, FaultCategory, ProviderFaultKind
+from paretoguard.chaos.injector import FaultInjector, FaultyProvider
+from paretoguard.chaos.policies import FaultPolicy, StepRangeSchedule
 from paretoguard.core.models import (
     ErrorInfo,
     FailureCategory,
@@ -284,6 +287,48 @@ async def test_persists_through_the_normal_experiment_pipeline() -> None:
 
         trace_df = store.trace_events_df(run_id="run-1")
         assert trace_df.height >= 1  # at least the recovery-action event
+
+        outcome_events = store.get_outcome_events("run-1")
+        assert len(outcome_events) == 1
+        assert outcome_events[0].succeeded
+        assert outcome_events[0].attempt_count == 2
+        assert outcome_events[0].final_model == "model-b"
+
+
+async def test_chaos_step_advances_per_attempt_so_a_retry_can_escape_a_fault() -> None:
+    """Regression test for the Commit 29 `chaos_step` fix: each attempt's
+    request must carry `chaos_step = attempt_number - 1`, not a fixed value
+    — otherwise a retry of the same candidate would replay the identical
+    fault decision as the attempt it's retrying and could never succeed."""
+    inner = _KeyedScriptedProvider("mock", {"model-a": [_ok("answer")]})
+    injector = FaultInjector(
+        [
+            FaultPolicy(
+                fault_id="first-attempt-only",
+                category=FaultCategory.PROVIDER,
+                kind=ProviderFaultKind.SERVER_ERROR.value,
+                # Fires only at chaos_step == 0 (the first attempt).
+                schedule=StepRangeSchedule(((0, 1.0), (1, 0.0))),
+                target_provider="mock",
+                expected_recoverability=ExpectedRecoverability.RECOVERABLE,
+            )
+        ],
+        seed=0,
+    )
+    provider = FaultyProvider(inner=inner, injector=injector)
+    router = StaticRouter(provider="mock", model="model-a")
+    policy = RecoveryPolicy(retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=1))
+    executor = ClosedLoopExecutor(
+        router,
+        _candidates(),
+        {"mock": provider},
+        recovery_policy=policy,
+        retry_policy=_NO_RUNTIME_RETRY,
+    )
+    result, outcome = await executor.execute(_case())
+    assert result.succeeded
+    assert outcome.attempt_count == 2
+    assert outcome.final_model == "model-a"  # recovered via retry, never fell back
 
 
 async def test_rejects_candidate_with_no_configured_provider() -> None:

@@ -6,6 +6,9 @@ import pytest
 
 from paretoguard.agents import AgentExecutor, AgentLimits, TerminationReason
 from paretoguard.agents.tools import CalculatorTool, InventoryLookupTool
+from paretoguard.chaos.faults import ExpectedRecoverability, FaultCategory, ToolFaultKind
+from paretoguard.chaos.injector import FaultInjector, FaultyProvider
+from paretoguard.chaos.policies import ConstantProbability, FaultPolicy, StepRangeSchedule
 from paretoguard.core.models import (
     ErrorInfo,
     FailureCategory,
@@ -248,3 +251,108 @@ def test_agent_limits_rejects_invalid_values() -> None:
         AgentLimits(max_cost_usd=-1.0)
     with pytest.raises(ValueError, match="max_wall_time_s"):
         AgentLimits(max_wall_time_s=0.0)
+
+
+# -- chaos integration (Commit 29) -------------------------------------------
+
+
+async def test_fault_injector_corrupts_a_tool_call_and_records_fault_id() -> None:
+    responses = [
+        _tool_call_response("inventory_lookup", {"sku": "SKU-1001"}),
+        _final_answer_response("I couldn't check the stock right now."),
+    ]
+    provider = _ScriptedProvider(responses)
+    runtime = Runtime(provider, retry_policy=RetryPolicy(max_attempts=1))
+    injector = FaultInjector(
+        [
+            FaultPolicy(
+                fault_id="tool-exception",
+                category=FaultCategory.TOOL,
+                kind=ToolFaultKind.EXCEPTION.value,
+                schedule=ConstantProbability(1.0),
+                target_tool="inventory_lookup",
+                expected_recoverability=ExpectedRecoverability.UNRECOVERABLE,
+            )
+        ],
+        seed=0,
+    )
+    executor = AgentExecutor(
+        runtime,
+        [CalculatorTool(), InventoryLookupTool()],
+        limits=AgentLimits(),
+        fault_injector=injector,
+    )
+
+    trajectory = await executor.run(
+        task_id="fault-task", provider="mock", model="mock-model", user_prompt="check stock"
+    )
+
+    tool_step = trajectory.steps[0]
+    assert tool_step.requested_tool == "inventory_lookup"
+    assert tool_step.fault_id == "tool-exception"
+    assert tool_step.tool_result is not None
+    assert tool_step.tool_result.is_error
+    # The tool itself was never actually called for an EXCEPTION fault (see
+    # chaos.injector.apply_tool_fault's docstring) — the executor still
+    # terminates gracefully rather than crashing.
+    assert trajectory.termination_reason == TerminationReason.FINAL_ANSWER
+
+
+async def test_no_fault_injector_means_tool_faults_never_fire() -> None:
+    responses = [
+        _tool_call_response("inventory_lookup", {"sku": "SKU-1001"}),
+        _final_answer_response("42 units in stock"),
+    ]
+    executor = _executor(responses)  # no fault_injector passed
+    trajectory = await executor.run(
+        task_id="no-fault-task", provider="mock", model="mock-model", user_prompt="check stock"
+    )
+    assert trajectory.steps[0].fault_id is None
+    assert trajectory.steps[0].tool_result is not None
+    assert not trajectory.steps[0].tool_result.is_error
+
+
+async def test_chaos_step_metadata_varies_per_step_for_provider_faults() -> None:
+    """A `FaultyProvider` wrapping the executor's own `Runtime` provider
+    should see a different `chaos_step` at each step — proving each step's
+    request carries `chaos_step=step_index`, not a fixed value (which would
+    make every step draw the identical fault decision, so the fault would
+    either fire at step 0 too or never fire at all)."""
+    responses = [
+        _tool_call_response("inventory_lookup", {"sku": "SKU-1001"}),
+        _final_answer_response("would have been ok"),
+    ]
+    inner = _ScriptedProvider(responses)
+    # Fires only from step 1 onward: step 0's tool-call request must
+    # succeed, step 1's request must fail.
+    injector = FaultInjector(
+        [
+            FaultPolicy(
+                fault_id="step-gated",
+                category=FaultCategory.PROVIDER,
+                kind="server_error",
+                schedule=StepRangeSchedule(((0, 0.0), (1, 1.0))),
+                target_provider="mock",
+                expected_recoverability=ExpectedRecoverability.RECOVERABLE,
+            )
+        ],
+        seed=0,
+    )
+    faulty = FaultyProvider(inner=inner, injector=injector)
+    runtime = Runtime(faulty, retry_policy=RetryPolicy(max_attempts=1))
+    executor = AgentExecutor(
+        runtime, [CalculatorTool(), InventoryLookupTool()], limits=AgentLimits(max_steps=5)
+    )
+
+    trajectory = await executor.run(
+        task_id="chaos-step-task", provider="mock", model="mock-model", user_prompt="check stock"
+    )
+
+    # Step 0 (chaos_step=0) succeeded — the tool call went through, proving
+    # the fault (which requires chaos_step >= 1) did not fire there. Step 1
+    # (chaos_step=1) then hit the fault and the provider call failed,
+    # terminating the trajectory — proving chaos_step did advance.
+    assert trajectory.step_count == 2
+    assert trajectory.steps[0].tool_result is not None
+    assert not trajectory.steps[0].tool_result.is_error
+    assert trajectory.termination_reason == TerminationReason.UNRECOVERABLE_FAILURE

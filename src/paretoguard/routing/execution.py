@@ -311,6 +311,7 @@ class ClosedLoopExecutor:
         health_tracker: HealthTracker | None = None,
         store: ExperimentStore | None = None,
         retry_policy: RetryPolicy | None = None,
+        budget_guard: BudgetGuard | None = None,
         pricing_table: PricingTable | None = None,
         profiles: dict[str, CandidateProfile] | None = None,
         max_attempts: int = 5,
@@ -330,7 +331,12 @@ class ClosedLoopExecutor:
         self._profiles = dict(profiles or {})
         self._max_attempts = max_attempts
         self._runtimes = {
-            name: Runtime(provider, retry_policy=retry_policy, pricing_table=pricing_table)
+            name: Runtime(
+                provider,
+                retry_policy=retry_policy,
+                budget_guard=budget_guard,
+                pricing_table=pricing_table,
+            )
             for name, provider in providers.items()
         }
 
@@ -386,6 +392,15 @@ class ClosedLoopExecutor:
                     "provider": current_provider,
                     "model": current_model,
                     "request_id": request_id,
+                    # `chaos_step` = attempt_number - 1: lets a
+                    # `chaos.FaultyProvider`-wrapped provider draw an
+                    # independent, still-reproducible fault decision per
+                    # attempt (`FaultInjector` keys its RNG on
+                    # (task_id, step, fault_id)) — without this, every retry
+                    # of the same task would replay the exact same draw at
+                    # step 0 and a retry could never observe a different
+                    # outcome than the attempt it's retrying (Commit 29).
+                    "metadata": {**probe_request.metadata, "chaos_step": attempt_number - 1},
                 }
             )
 
@@ -523,6 +538,8 @@ class ClosedLoopExecutor:
             total_latency_ms=total_latency,
             recovery_actions=recovery_actions,
         )
+        if self._store is not None:
+            self._store.record_outcome_event(outcome_event)
         return result, outcome_event
 
     def _health_snapshot(self) -> dict[str, ModelHealth]:

@@ -14,6 +14,17 @@ escalate) is that module's job, not this one's.
 `AgentLimits.max_steps`, and every `return` inside it is an explicit,
 typed `TerminationReason` — there is no code path that falls through
 without one.
+
+**Chaos integration (Commit 29)**: an optional `fault_injector` applies
+tool-level faults immediately before each `tool.run()` call, recording the
+fault's id on the resulting `AgentStep` — the one injection point this
+executor uniquely owns (`chaos.injector`'s module docstring names
+`AgentExecutor` as its intended caller for tool faults). Provider-level
+faults need no executor-side integration at all: wrap the `Provider` given
+to this executor's `Runtime` in `chaos.injector.FaultyProvider`, and every
+step already carries a `chaos_step` (`= step_index`) in its request
+metadata for it to key on, matching `ClosedLoopExecutor`'s convention for
+recovery attempts (see `routing.execution`).
 """
 
 import time
@@ -22,9 +33,18 @@ from typing import Any
 
 from paretoguard.agents.protocol import Tool, ToolArgumentError
 from paretoguard.agents.state import AgentStep, AgentTrajectory, TerminationReason
+from paretoguard.chaos.faults import ToolFaultKind
+from paretoguard.chaos.injector import FaultInjector, apply_tool_fault, check_tool_fault
 from paretoguard.core.ids import deterministic_request_id
-from paretoguard.core.models import FinishReason, InferenceRequest, Message, Role
+from paretoguard.core.models import FinishReason, InferenceRequest, Message, Role, ToolResult
 from paretoguard.runtime import Runtime
+
+_NO_UNDERLYING_CALL_FAULTS = frozenset(
+    {ToolFaultKind.EXCEPTION, ToolFaultKind.TIMEOUT, ToolFaultKind.TEMPORARY_UNAVAILABLE}
+)
+"""Tool faults that never call the underlying tool at all (see
+`chaos.injector.apply_tool_fault`'s docstring) — every other `ToolFaultKind`
+corrupts a *real* result, so the tool must still be run first."""
 
 
 @dataclass(frozen=True)
@@ -54,11 +74,17 @@ class AgentExecutor:
     termination. Stateless across calls — safe to reuse for many tasks."""
 
     def __init__(
-        self, runtime: Runtime, tools: list[Tool[Any]], *, limits: AgentLimits | None = None
+        self,
+        runtime: Runtime,
+        tools: list[Tool[Any]],
+        *,
+        limits: AgentLimits | None = None,
+        fault_injector: FaultInjector | None = None,
     ) -> None:
         self._runtime = runtime
         self._tools: dict[str, Tool[Any]] = {tool.name: tool for tool in tools}
         self._limits = limits or AgentLimits()
+        self._fault_injector = fault_injector
 
     async def run(
         self,
@@ -92,7 +118,12 @@ class AgentExecutor:
                 model=model,
                 messages=list(messages),
                 tools=tool_specs,
-                metadata=metadata or {},
+                # `chaos_step=step_index`: lets a `chaos.FaultyProvider`
+                # wrapping this executor's own `Runtime` provider draw an
+                # independent, reproducible fault decision at each step
+                # (see `routing.execution.ClosedLoopExecutor`'s identical
+                # `chaos_step` convention for recovery attempts).
+                metadata={**(metadata or {}), "chaos_step": step_index},
             )
             response = await self._runtime.run(request)
             step_cost = response.cost.total_cost_usd if response.cost else None
@@ -197,7 +228,8 @@ class AgentExecutor:
                     task_id, provider, model, steps, TerminationReason.INVALID_TOOL_ARGUMENTS
                 )
 
-            result = tool.run(validated_args).model_copy(update={"tool_call_id": call.id})
+            result, fault_id = self._run_tool(tool, validated_args, task_id, step_index, call.name)
+            result = result.model_copy(update={"tool_call_id": call.id})
             steps.append(
                 AgentStep(
                     step_index=step_index,
@@ -205,6 +237,7 @@ class AgentExecutor:
                     requested_arguments=call.arguments,
                     arguments_valid=True,
                     tool_result=result,
+                    fault_id=fault_id,
                     latency_ms=response.latency.total_latency_ms,
                     cost_usd=step_cost,
                     total_tokens=response.token_usage.total_tokens,
@@ -222,6 +255,26 @@ class AgentExecutor:
             messages.append(Message(role=Role.TOOL, content=observation, tool_call_id=call.id))
 
         return self._finish(task_id, provider, model, steps, TerminationReason.STEP_LIMIT)
+
+    def _run_tool(
+        self, tool: Tool[Any], args: Any, task_id: str, step_index: int, tool_name: str
+    ) -> tuple[ToolResult, str | None]:
+        """Runs `tool`, consulting `self._fault_injector` first (if set) via
+        the same `check_tool_fault`/`apply_tool_fault` pair
+        `chaos.injector`'s module docstring names `AgentExecutor` as the
+        intended caller of. Returns `(result, fault_id)` — `fault_id` is
+        `None` when no fault fired, for `AgentStep.fault_id`."""
+        if self._fault_injector is None:
+            return tool.run(args), None
+        event = check_tool_fault(
+            self._fault_injector, task_id=task_id, step=step_index, tool_name=tool_name
+        )
+        if event is None:
+            return tool.run(args), None
+        real_result = (
+            None if ToolFaultKind(event.kind) in _NO_UNDERLYING_CALL_FAULTS else tool.run(args)
+        )
+        return apply_tool_fault(event, real_result), event.fault_id
 
     def _exceeded_wall_time(self, start: float) -> bool:
         if self._limits.max_wall_time_s is None:

@@ -19,6 +19,7 @@ from paretoguard.core.models import (
     InferenceRequest,
     InferenceResponse,
     Message,
+    OutcomeEvent,
     RoutingDecision,
     RunManifest,
     ToolSpec,
@@ -223,6 +224,31 @@ class ExperimentStore:
             ],
         )
 
+    def record_outcome_event(self, event: OutcomeEvent) -> None:
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO outcome_events VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                str(event.outcome_id),
+                event.run_id,
+                event.task_id,
+                str(event.initial_routing_decision_id)
+                if event.initial_routing_decision_id
+                else None,
+                event.final_provider,
+                event.final_model,
+                event.attempt_count,
+                event.succeeded,
+                event.failure_category,
+                event.total_cost_usd,
+                event.total_latency_ms,
+                _dumps(event.recovery_actions),
+                event.terminal,
+            ],
+        )
+
     # -- reads ------------------------------------------------------------
 
     def get_run(self, run_id: str) -> RunManifest | None:
@@ -300,6 +326,38 @@ class ExperimentStore:
         return self._conn.execute(
             "SELECT * FROM eval_results WHERE run_id = ? ORDER BY sequence", [run_id]
         ).pl()
+
+    def outcome_events_df(self, run_id: str | None = None) -> pl.DataFrame:
+        if run_id is None:
+            return self._conn.execute("SELECT * FROM outcome_events").pl()
+        return self._conn.execute("SELECT * FROM outcome_events WHERE run_id = ?", [run_id]).pl()
+
+    def get_outcome_events(self, run_id: str) -> list[OutcomeEvent]:
+        df = self.outcome_events_df(run_id=run_id)
+        events = []
+        for row in df.iter_rows(named=True):
+            events.append(
+                OutcomeEvent(
+                    outcome_id=UUID(row["outcome_id"]),
+                    run_id=row["run_id"],
+                    task_id=row["task_id"],
+                    initial_routing_decision_id=(
+                        UUID(row["initial_routing_decision_id"])
+                        if row["initial_routing_decision_id"]
+                        else None
+                    ),
+                    final_provider=row["final_provider"],
+                    final_model=row["final_model"],
+                    attempt_count=row["attempt_count"],
+                    succeeded=row["succeeded"],
+                    failure_category=row["failure_category"],
+                    total_cost_usd=row["total_cost_usd"],
+                    total_latency_ms=row["total_latency_ms"],
+                    recovery_actions=_loads(row["recovery_actions"], []),
+                    terminal=row["terminal"],
+                )
+            )
+        return events
 
     def get_eval_results(self, run_id: str) -> list["EvalResult"]:
         """Reads back EvalResults for a run in canonical (case, repetition) order,

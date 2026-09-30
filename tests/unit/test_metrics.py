@@ -4,7 +4,8 @@ from uuid import uuid4
 
 import pytest
 
-from paretoguard.evals.metrics import compute_metrics, pass_at_k
+from paretoguard.core.models import OutcomeEvent
+from paretoguard.evals.metrics import compute_metrics, compute_resilience_metrics, pass_at_k
 from paretoguard.evals.models import EvalResult, GraderKind
 
 
@@ -195,3 +196,101 @@ def test_always_successful_task_has_zero_variance_and_full_consistency() -> None
     assert summary.consistency == 1.0
     assert summary.mean_variance == 0.0
     assert summary.success_rate == 1.0
+
+
+# -- compute_resilience_metrics (Commit 29) -----------------------------------
+
+
+def _outcome(
+    *,
+    succeeded: bool,
+    attempt_count: int = 1,
+    recovery_actions: list[str] | None = None,
+    total_cost_usd: float | None = None,
+    total_latency_ms: float = 10.0,
+    failure_category: str | None = None,
+) -> OutcomeEvent:
+    return OutcomeEvent(
+        final_provider="mock",
+        final_model="model-a",
+        attempt_count=attempt_count,
+        succeeded=succeeded,
+        failure_category=failure_category,
+        total_cost_usd=total_cost_usd,
+        total_latency_ms=total_latency_ms,
+        recovery_actions=recovery_actions or [],
+    )
+
+
+def test_compute_resilience_metrics_rejects_empty_input() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        compute_resilience_metrics([])
+
+
+def test_raw_failure_rate_counts_first_attempt_failures_including_recovered_ones() -> None:
+    outcomes = [
+        _outcome(succeeded=True, attempt_count=1),  # succeeded first try: not a raw failure
+        _outcome(succeeded=True, attempt_count=2, recovery_actions=["retry_same"]),  # recovered
+        _outcome(succeeded=False, attempt_count=1),  # failed, no recovery attempted
+    ]
+    summary = compute_resilience_metrics(outcomes)
+    assert summary.raw_failure_rate == pytest.approx(2 / 3)
+    assert summary.recovery_rate == pytest.approx(1 / 2)  # 1 of the 2 raw failures recovered
+
+
+def test_recovery_rate_is_none_when_there_are_no_raw_failures() -> None:
+    outcomes = [_outcome(succeeded=True, attempt_count=1)]
+    summary = compute_resilience_metrics(outcomes)
+    assert summary.raw_failure_rate == 0.0
+    assert summary.recovery_rate is None
+
+
+def test_action_rates_reflect_recovery_actions_present_per_task() -> None:
+    outcomes = [
+        _outcome(succeeded=True, attempt_count=2, recovery_actions=["retry_same"]),
+        _outcome(succeeded=True, attempt_count=2, recovery_actions=["fallback_model"]),
+        _outcome(succeeded=True, attempt_count=2, recovery_actions=["fallback_provider"]),
+        _outcome(succeeded=True, attempt_count=2, recovery_actions=["escalate"]),
+        _outcome(succeeded=True, attempt_count=2, recovery_actions=["probe"]),
+    ]
+    summary = compute_resilience_metrics(outcomes)
+    assert summary.retry_rate == pytest.approx(1 / 5)
+    assert summary.fallback_rate == pytest.approx(2 / 5)  # fallback_model + fallback_provider
+    assert summary.escalation_rate == pytest.approx(1 / 5)
+    assert summary.probe_rate == pytest.approx(1 / 5)
+
+
+def test_cost_per_successful_task_ignores_failures_and_missing_cost() -> None:
+    outcomes = [
+        _outcome(succeeded=True, total_cost_usd=0.02),
+        _outcome(succeeded=True, total_cost_usd=0.04),
+        _outcome(succeeded=True, total_cost_usd=None),
+        _outcome(succeeded=False, total_cost_usd=1.0),
+    ]
+    summary = compute_resilience_metrics(outcomes)
+    assert summary.cost_per_successful_task_usd == pytest.approx(0.03)
+
+
+def test_latency_percentiles_are_computed_over_all_outcomes() -> None:
+    outcomes = [_outcome(succeeded=True, total_latency_ms=ms) for ms in [10.0, 20.0, 30.0, 40.0]]
+    summary = compute_resilience_metrics(outcomes)
+    assert summary.median_latency_ms == pytest.approx(20.0)
+    assert summary.p95_latency_ms == pytest.approx(40.0)
+
+
+def test_unrecovered_failure_distribution_counts_only_final_failures() -> None:
+    outcomes = [
+        _outcome(succeeded=False, failure_category="timeout"),
+        _outcome(succeeded=False, failure_category="timeout"),
+        _outcome(succeeded=False, failure_category=None),
+        _outcome(succeeded=True),
+    ]
+    summary = compute_resilience_metrics(outcomes)
+    assert summary.unrecovered_failure_distribution == {"timeout": 2, "unknown": 1}
+
+
+def test_average_tool_calls_defaults_to_none_and_can_be_supplied() -> None:
+    outcomes = [_outcome(succeeded=True)]
+    assert compute_resilience_metrics(outcomes).average_tool_calls is None
+    summary = compute_resilience_metrics(outcomes, average_tool_calls=2.5)
+    assert summary.average_tool_calls == pytest.approx(2.5)

@@ -106,6 +106,60 @@ def test_select_fallback_returns_none_when_depth_exhausted() -> None:
     assert selection.candidate is None
 
 
+def test_select_fallback_depth_counts_distinct_candidates_not_total_attempts() -> None:
+    """Regression test (Commit 29's resilience_benchmark surfaced this):
+    two prior attempts against the *same* candidate must not consume
+    fallback depth budget the way two attempts against *different*
+    candidates would — `max_fallback_depth` bounds distinct candidates
+    (see its own docstring), not raw attempt count."""
+    context = _context(
+        attempted=(
+            AttemptRecord("mock", "model-a", FailureCategory.TIMEOUT, False),
+            AttemptRecord("mock", "model-a", FailureCategory.TIMEOUT, False),
+        ),
+        current_model="model-a",
+    )
+    # Only one distinct candidate (model-a) has been tried so far, despite
+    # two attempts against it — depth=2 must still permit picking a second
+    # *distinct* candidate.
+    selection = select_fallback(context, _candidates(), FallbackPolicy(max_fallback_depth=2))
+    assert selection.candidate is not None
+    assert selection.candidate.name == "model-b"
+
+
+def test_select_fallback_depth_permits_exactly_max_fallback_depth_distinct_candidates() -> None:
+    """Regression test: `max_fallback_depth=3` must permit trying 3
+    distinct candidates in total (its docstring says "including the
+    original"), not 2 — the depth check must not be off by one."""
+    context = _context()  # fresh chain: only the current candidate (model-a) tried so far
+    selection = select_fallback(context, _candidates(), FallbackPolicy(max_fallback_depth=3))
+    assert (
+        selection.candidate is not None
+    )  # 1 distinct tried so far; 3 allowed -> fallback permitted
+
+    context_two_tried = _context(
+        attempted=(AttemptRecord("mock", "model-a", FailureCategory.TIMEOUT, False),),
+        current_model="model-b",
+    )
+    selection_two = select_fallback(
+        context_two_tried, _candidates(), FallbackPolicy(max_fallback_depth=3)
+    )
+    assert selection_two.candidate is not None
+    assert selection_two.candidate.name == "model-c"  # the 3rd distinct candidate, still permitted
+
+    context_three_tried = _context(
+        attempted=(
+            AttemptRecord("mock", "model-a", FailureCategory.TIMEOUT, False),
+            AttemptRecord("mock", "model-b", FailureCategory.TIMEOUT, False),
+        ),
+        current_model="model-c",
+    )
+    selection_three = select_fallback(
+        context_three_tried, _candidates(), FallbackPolicy(max_fallback_depth=3)
+    )
+    assert selection_three.candidate is None  # already tried all 3 permitted distinct candidates
+
+
 def test_select_fallback_skips_open_circuit() -> None:
     breaker = CircuitBreaker(CircuitBreakerConfig(failure_threshold=1))
     breaker.record_failure("mock:model-b")

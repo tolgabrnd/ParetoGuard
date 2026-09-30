@@ -88,4 +88,62 @@ stronger claims than the evidence supports.
   behavior observed in simulation is evidence about the recovery *logic*, not a
   guarantee about production tool failure modes.
 
+### Phase E specifics (2026-09-30)
+
+- **`resilience_v1`'s fault model is i.i.d. per attempt, not a sustained/correlated
+  outage.** `chaos.policies.ConstantProbability` draws an independent fault decision
+  at every attempt (keyed by `(seed, task_id, chaos_step, fault_id)`); it does not
+  model a provider that is *reliably* down for a stretch of time the way
+  `routing.reliability_simulation`'s `two_model_degradation_schedule` does. Under an
+  i.i.d. stream, retry-same and fallback face statistically the same per-attempt
+  success probability, so `routing.resilience_benchmark`'s flagship comparison is not
+  expected to show fallback systematically beating retry-only — and the actual
+  0/5/15/30% run (`scripts/phase_e_results/resilience_comparison.csv`) does not: at
+  24 tasks per cell, every recovery-enabled config (B–E) recovers 100% of raw
+  failures at every nonzero fault level tested, with only *how* they got there
+  (more retries vs. more fallback switches, visible in `average_attempts`) differing.
+  A larger suite, a higher fault level, or a correlated-outage fault schedule would be
+  needed to observe a recovery-enabled config *failing* to fully recover — this run
+  does not exercise that regime, and no claim here should be read as "recovery always
+  achieves 100%."
+- **`resilience_v1` injects no quality-category faults**, so `RecoveryAction.ESCALATE`
+  is exercised by unit tests (`test_recovery_policy.py`) but not by this benchmark —
+  `escalation_rate == 0.0` in every row of the flagship comparison is expected, not a
+  defect. A future suite would need to inject `FailureCategory.SCHEMA_FAILURE`/
+  `INVALID_OUTPUT`/`REASONING_FAILURE`-shaped faults to exercise it end-to-end.
+- **`RecoveryPolicy.decide` does not read `RecoveryContext.health_snapshots`.**
+  `ClosedLoopExecutor` populates it on every call (and feeds `HealthTracker` on every
+  attempt), but the only health-*derived* signal the current `RecoveryPolicy`
+  implementation actually consults is `CircuitBreaker` state (`state_for`), which is
+  updated from the same success/failure stream but is a separate, coarser signal
+  (open/half-open/closed) than the rolling EMA `health_snapshots` carries. Wiring a
+  health-aware decision (e.g. preferring a fallback candidate with a better recent
+  success rate over routing order) is future work, not implemented in Phase E.
+- **`AgentStep.recovery_action` is unused in Phase E.** The field exists (reserved
+  since Commit 25) for a future mid-trajectory recovery integration where
+  `AgentExecutor` would consult a `RecoveryPolicy` after a failed step instead of
+  terminating `UNRECOVERABLE_FAILURE` immediately; Phase E only wires recovery at the
+  task level (`ClosedLoopExecutor`), never within a single agent trajectory's steps.
+  `AgentStep.fault_id` *is* wired (tool-level faults only — provider-level faults
+  reaching an agent step are visible in the resulting `TerminationReason`/response
+  error, but not linked back to their originating `FaultEvent`'s id on the step
+  itself unless the fault was a tool fault).
+- **Wall-clock latency is not part of the determinism guarantee.** Every
+  seed-derived field (success/failure, recovery actions taken, attempt counts, costs,
+  candidate selections) is bit-for-bit reproducible across independent process runs
+  (verified by `scripts/phase_e_resilience_experiment.py --verify-determinism` and by
+  running the full script twice as separate processes and diffing the CSV output);
+  `median_latency_ms`/`p95_latency_ms` are measured via real `time.perf_counter()`
+  calls inside `MockProvider.complete` and are excluded from every determinism
+  comparison in this repo for exactly that reason.
+- **The `select_fallback` depth-accounting bug found and fixed during this work**
+  (see `recovery/fallback.py`'s inline comment and
+  `test_select_fallback_depth_counts_distinct_candidates_not_total_attempts`/
+  `test_select_fallback_depth_permits_exactly_max_fallback_depth_distinct_candidates`
+  in `test_recovery_policy.py`) means any `RecoveryPolicy` comparison run before this
+  commit that mixed retry and fallback in the same chain under-counted available
+  fallback depth; no such comparison was ever published as a result prior to this fix,
+  so there is nothing to retract, but a reader diffing this commit against Commit 27's
+  original `fallback.py` should not assume the old behavior was equivalent.
+
 This file will grow with specific, dated entries as each subsystem is implemented.

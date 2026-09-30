@@ -13,7 +13,15 @@ import duckdb
 SCHEMA_VERSION_TABLE = "_paretoguard_schema_version"
 
 KNOWN_TABLES = frozenset(
-    {"runs", "requests", "responses", "trace_events", "routing_decisions", "eval_results"}
+    {
+        "runs",
+        "requests",
+        "responses",
+        "trace_events",
+        "routing_decisions",
+        "eval_results",
+        "outcome_events",
+    }
 )
 
 
@@ -144,6 +152,28 @@ def _migration_003_cost_basis(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("ALTER TABLE responses ADD COLUMN cost_basis VARCHAR")
 
 
+def _migration_004_outcome_events(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE outcome_events (
+            outcome_id VARCHAR PRIMARY KEY,
+            run_id VARCHAR,
+            task_id VARCHAR,
+            initial_routing_decision_id VARCHAR,
+            final_provider VARCHAR,
+            final_model VARCHAR,
+            attempt_count INTEGER,
+            succeeded BOOLEAN,
+            failure_category VARCHAR,
+            total_cost_usd DOUBLE,
+            total_latency_ms DOUBLE,
+            recovery_actions VARCHAR,
+            terminal BOOLEAN
+        )
+        """
+    )
+
+
 # (version, description, apply). Append new entries here for future schema changes;
 # never edit an already-released migration in place.
 MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] = [
@@ -154,6 +184,11 @@ MIGRATIONS: list[tuple[int, str, Callable[[duckdb.DuckDBPyConnection], None]]] =
     ),
     (2, "add eval_results table", _migration_002_eval_results),
     (3, "add cost_basis column to responses (ESTIMATED/SIMULATED)", _migration_003_cost_basis),
+    (
+        4,
+        "add outcome_events table (ClosedLoopExecutor's one-row-per-task summary, Commit 29)",
+        _migration_004_outcome_events,
+    ),
 ]
 
 

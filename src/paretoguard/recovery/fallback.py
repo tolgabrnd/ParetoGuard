@@ -50,12 +50,25 @@ def select_fallback(
     let a probe through; refusing it here would defeat that. Returns
     `candidate=None` if depth is exhausted or nothing remains.
     """
-    if len(context.attempted) + 1 >= policy.max_fallback_depth:
-        return FallbackSelection(candidate=None, is_probe=False, excluded={})
-
     attempted_keys = {candidate_key(a.provider, a.model) for a in context.attempted}
     if context.current_key() is not None:
         attempted_keys.add(context.current_key())  # type: ignore[arg-type]
+
+    # `max_fallback_depth` bounds *distinct* candidates already tried
+    # (`attempted_keys`, which already includes the current one) against the
+    # total allowed (see this dataclass field's own docstring: "including
+    # the original") — not total attempts, and not "distinct tried + 1
+    # about to be tried >= depth" (an off-by-one that would cap a chain at
+    # `max_fallback_depth - 1` distinct candidates, one fewer than promised).
+    # Found via Commit 29's resilience_benchmark: the original
+    # `len(context.attempted) + 1 >= depth` check both double-counted
+    # same-candidate retries against the depth budget (inflating
+    # `len(context.attempted)` without a new distinct candidate) and, even
+    # after correcting that to count distinct keys, still blocked reaching
+    # exactly `max_fallback_depth` distinct candidates because of the extra
+    # `+ 1`.
+    if len(attempted_keys) >= policy.max_fallback_depth:
+        return FallbackSelection(candidate=None, is_probe=False, excluded={})
 
     # A placeholder request/features pair purely to satisfy RoutingRequest's
     # shape — filter_eligible only reads `.features` (the real task's, from

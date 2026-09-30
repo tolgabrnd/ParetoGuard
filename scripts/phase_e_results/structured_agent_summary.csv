@@ -1,0 +1,2 @@
+n_tasks,n_succeeded,success_rate,average_tool_calls,label
+9,7,0.7777777777777778,1.1111111111111112,SIMULATION

@@ -14,6 +14,7 @@ from paretoguard.core.models import (
     InferenceRequest,
     LatencyRecord,
     Message,
+    OutcomeEvent,
     Role,
     RoutingDecision,
     RunManifest,
@@ -184,6 +185,58 @@ def test_record_routing_decision(store: ExperimentStore) -> None:
     df = store.routing_decisions_df(run_id="run-1")
     assert df.height == 1
     assert df["selected_model"][0] == "mock-cheap"
+
+
+def test_record_and_get_outcome_events_roundtrip(store: ExperimentStore) -> None:
+    decision_id = uuid4()
+    event = OutcomeEvent(
+        run_id="run-1",
+        task_id="task-1",
+        initial_routing_decision_id=decision_id,
+        final_provider="mock",
+        final_model="model-b",
+        attempt_count=2,
+        succeeded=True,
+        failure_category=None,
+        total_cost_usd=0.01,
+        total_latency_ms=15.0,
+        recovery_actions=["fallback_model"],
+    )
+    store.record_outcome_event(event)
+
+    fetched = store.get_outcome_events("run-1")
+    assert len(fetched) == 1
+    assert fetched[0].task_id == "task-1"
+    assert fetched[0].initial_routing_decision_id == decision_id
+    assert fetched[0].attempt_count == 2
+    assert fetched[0].succeeded is True
+    assert fetched[0].recovery_actions == ["fallback_model"]
+    assert fetched[0].terminal is True
+
+
+def test_outcome_events_df_filters_by_run_id(store: ExperimentStore) -> None:
+    store.record_outcome_event(
+        OutcomeEvent(
+            run_id="run-1",
+            final_provider="mock",
+            final_model="a",
+            attempt_count=1,
+            succeeded=True,
+            total_latency_ms=1.0,
+        )
+    )
+    store.record_outcome_event(
+        OutcomeEvent(
+            run_id="run-2",
+            final_provider="mock",
+            final_model="b",
+            attempt_count=1,
+            succeeded=False,
+            total_latency_ms=1.0,
+        )
+    )
+    assert store.outcome_events_df(run_id="run-1").height == 1
+    assert store.outcome_events_df().height == 2
 
 
 def test_record_and_get_eval_results_roundtrip_in_sequence_order(store: ExperimentStore) -> None:
