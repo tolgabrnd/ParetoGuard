@@ -42,8 +42,9 @@ dependencies = [
 # base dependency; `paretoguard.routing` itself never imports torch.
 torch = ["torch>=2.4"]
 
-[project.scripts]
-paretoguard = "paretoguard.cli.main:app"
+# No [project.scripts] entry point yet: paretoguard.cli is an empty placeholder
+# module (Phase G, not started — see docs/BUILD_PLAN.md). Declaring one here before
+# paretoguard.cli.main exists would make `uv run paretoguard` crash on import.
 
 [dependency-groups]
 dev = [
