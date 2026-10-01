@@ -127,3 +127,33 @@ chaos-affected benchmark additionally derives its fault decisions from a
 seeded `Random` keyed on stable inputs only (`docs/CHAOS_ENGINEERING.md`).
 `scripts/phase_e_resilience_experiment.py --verify-determinism` is the
 harness that checks this explicitly, rather than assuming it holds.
+`scripts/phase_f_report.py` extends this to the statistics/reporting layer:
+every deterministic field of its output (`report.json`, `flagship_summary.json`)
+is verified identical across two fully independent process invocations —
+see `docs/REPRODUCIBILITY.md`.
+
+## Statistical comparison, regression detection, and reporting (Phase F)
+
+Turning raw `EvalResult`/`OutcomeEvent` rows into defensible comparisons —
+bootstrap confidence intervals, paired-vs-independent significance tests,
+effect sizes, Holm-Bonferroni correction, practical-vs-statistical
+regression gating, and Pareto frontier analysis — is `paretoguard.statistics`'s
+job, documented in full in `docs/STATISTICS.md` rather than duplicated here.
+`paretoguard.reports` turns a `statistics`-backed analysis of one (or two
+compared) persisted runs into a `BenchmarkReport` (Markdown/JSON) and charts
+— see `docs/BENCHMARKS.md`. Both modules operate **only** on data already
+persisted through `storage.ExperimentStore`; neither re-executes a benchmark
+or accepts a hand-entered summary value.
+
+A note on calibration specifically: `routing.learned.evaluate_calibration`
+(Phase D) already enforces the train/held-out boundary this requires —
+`scripts/phase_d_experiment.py` only ever calls it against the `test` split
+built by `routing.splits`' group-aware splitter, never `train`. Phase F's
+`reports.charts.plot_calibration` accepts pre-computed `CalibrationBin`s (mean
+predicted vs. mean actual success per bin) rather than a model/dataset pair,
+so it cannot itself introduce a train/test leak — whoever computes the bins
+is responsible for using held-out data, exactly as `evaluate_calibration`
+already does. No Phase F script currently calls `plot_calibration` (the
+Phase D/E/E.5/F flagship scripts evaluate recovery behavior, not learned
+routing), so this is a documented, available capability, not yet exercised
+end-to-end by any committed script.

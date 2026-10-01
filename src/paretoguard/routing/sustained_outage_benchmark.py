@@ -52,12 +52,14 @@ specifically so "no sleep() in tests" could hold; this is the same
 principle applied to a multi-step scenario instead of a unit test).
 """
 
+import platform
 from dataclasses import dataclass
 
+from paretoguard import __version__
 from paretoguard.chaos.injector import FaultInjector, FaultyProvider
 from paretoguard.chaos.policies import ConstantProbability, FaultPolicy
 from paretoguard.chaos.scenarios import provider_degradation_schedule
-from paretoguard.core.models import Message, Role
+from paretoguard.core.models import Message, Role, RunManifest
 from paretoguard.evals.metrics import compute_resilience_metrics
 from paretoguard.evals.models import EvalCase, GraderConfig, GraderKind, GroundTruth
 from paretoguard.providers.base import Provider
@@ -231,6 +233,22 @@ async def run_sustained_outage_scenario(
             max_attempts=spec.max_attempts,
         )
         run_id = f"sustained-outage-{spec.name}"
+        if store is not None:
+            store.record_run(
+                RunManifest(
+                    run_id=run_id,
+                    paretoguard_version=__version__,
+                    os=platform.system(),
+                    python_version=platform.python_version(),
+                    seed=seed,
+                    suite_name="sustained_outage",
+                    suite_version="1.0.0",
+                    router_name="static",
+                    router_config={"recovery_config": spec.name, "total_steps": total_steps},
+                    task_count=total_steps,
+                    label="SIMULATION",
+                )
+            )
         primary_key = f"{_PRIMARY_PROVIDER}:{candidates()[0].name}"
 
         previous_final_provider: str | None = None

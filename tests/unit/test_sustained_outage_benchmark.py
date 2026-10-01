@@ -2,6 +2,7 @@
 correlated-outage scenario."""
 
 from paretoguard.routing.sustained_outage_benchmark import run_sustained_outage_scenario
+from paretoguard.storage import ExperimentStore
 
 
 def _small_scenario_kwargs() -> dict:
@@ -92,3 +93,18 @@ async def test_no_pricing_means_no_fabricated_cost_field() -> None:
     results = await run_sustained_outage_scenario(**_small_scenario_kwargs())
     for r in results:
         assert not hasattr(r.metrics, "cost_overhead_usd")
+
+
+async def test_persists_a_run_manifest_per_config() -> None:
+    """Regression test: a real end-to-end bug (scripts/phase_f_report.py)
+    found that this orchestrator persisted every per-task row but never
+    registered a RunManifest, so statistics.regression.check_regression/
+    reports.generate_report (both of which require store.get_run to
+    succeed) could never find these runs."""
+    with ExperimentStore(":memory:") as store:
+        results = await run_sustained_outage_scenario(**_small_scenario_kwargs(), store=store)
+        for r in results:
+            manifest = store.get_run(f"sustained-outage-{r.recovery_config}")
+            assert manifest is not None
+            assert manifest.label == "SIMULATION"
+            assert manifest.task_count == 60

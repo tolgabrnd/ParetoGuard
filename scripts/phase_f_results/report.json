@@ -1,0 +1,66 @@
+{
+  "run_id": "resilience-resilience_v1-0.3-E-full_policy",
+  "manifest": {
+    "run_id": "resilience-resilience_v1-0.3-E-full_policy",
+    "paretoguard_version": "0.1.0",
+    "git_sha": null,
+    "created_at": "2026-10-01T19:46:03.074068+02:00",
+    "os": "Windows",
+    "python_version": "3.12.14",
+    "seed": 0,
+    "suite_name": "resilience_v1",
+    "suite_version": "1.0.0",
+    "router_name": "static",
+    "router_config": {
+      "recovery_config": "E-full_policy",
+      "fault_level": 0.3
+    },
+    "pricing_config_version": null,
+    "task_count": 30,
+    "repetitions": 1,
+    "environment": {},
+    "label": "SIMULATION"
+  },
+  "sample_size": 30,
+  "success_rate": 1.0,
+  "success_rate_ci": {
+    "lower": 1.0,
+    "upper": 1.0,
+    "confidence_level": 0.95,
+    "reliable": true
+  },
+  "cost_per_success_usd": null,
+  "mean_latency_ms": 0.01781332539394498,
+  "failure_taxonomy": [],
+  "recovery_summary": {
+    "n": 30,
+    "task_success_rate": 1.0,
+    "raw_failure_rate": 0.3333333333333333,
+    "recovery_rate": 1.0,
+    "retry_rate": 0.3,
+    "fallback_rate": 0.16666666666666666,
+    "escalation_rate": 0.0,
+    "probe_rate": 0.0,
+    "average_attempts": 1.4666666666666666,
+    "average_tool_calls": null,
+    "cost_per_successful_task_usd": null,
+    "median_latency_ms": 0.015300000086426735,
+    "p95_latency_ms": 0.02989999484270811,
+    "unrecovered_failure_distribution": {}
+  },
+  "pareto_analysis": null,
+  "comparison": {
+    "baseline_run_id": "resilience-resilience_v1-0.3-A-no_recovery",
+    "candidate_run_id": "resilience-resilience_v1-0.3-E-full_policy",
+    "metric_name": "success_rate",
+    "baseline_estimate": 0.6666666666666666,
+    "candidate_estimate": 1.0,
+    "absolute_delta": 0.33333333333333337,
+    "raw_p_value": 0.001953125,
+    "conclusion": "improvement_detected"
+  },
+  "limitations": [
+    "No cost data available for this run (no PricingTable configured, or no successes).",
+    "No Pareto analysis available: a single run's EvalResults don't carry the multi-candidate data a frontier needs (see evals.matrix.MatrixRunner)."
+  ]
+}

@@ -364,4 +364,63 @@ route around the remaining cost by writing `EvalResult` rows directly via
 a legitimate, faster way to unit-test the regression engine's logic against real
 stored rows, not a workaround that hides a correctness gap.
 
+### Phase F item: Commit 32 end-to-end bugs found and fixed (2026-10-01)
+
+Running `scripts/phase_f_report.py` end-to-end (not just unit tests) surfaced two
+real bugs, neither caught by the unit-test suites built in isolation:
+
+- **None of the three Phase E.5 recovery-scenario orchestrators
+  (`run_resilience_benchmark`, `run_sustained_outage_scenario`,
+  `run_escalation_scenario`) ever called `store.record_run(...)`.** Each one
+  persisted its per-task `requests`/`responses`/`eval_results`/`outcome_events`
+  through `ClosedLoopExecutor` when given a store, but never registered a
+  `RunManifest` for the run ids it generated — invisible while Phase E/E.5 only
+  ever consumed their in-memory return values, but fatal for
+  `statistics.regression.check_regression`/`reports.generate_report`, both of
+  which require `store.get_run(run_id)` to succeed. First found via
+  `run_resilience_benchmark`/`run_sustained_outage_scenario` while debugging
+  `scripts/phase_f_report.py` end-to-end; `run_escalation_scenario` was initially
+  — incorrectly — assumed to already be fine by inspection of its call sites alone
+  rather than by actually testing `get_run` against it, and was found to have the
+  identical gap once that assumption was checked properly. All three now call
+  `store.record_run(...)` (once per cell/arm), with `label="SIMULATION"` set
+  directly (these are always-synthetic benchmarks) rather than left `None` for a
+  caller to patch in after the fact, as the original flagship script had to. Every
+  other store-backed orchestrator in this repo
+  (`evals.runner.BenchmarkRunner`, `routing.execution.RoutedBenchmarkRunner`,
+  `evals.matrix.MatrixRunner`) was independently verified — not assumed — to
+  already record a manifest. Regression-tested in all three orchestrators'
+  own test files (`test_persists_a_run_manifest_for_every_cell`/`_per_config`/
+  `_for_each_arm`).
+- **`Path.write_text(...)` without an explicit encoding silently wrote invalid
+  UTF-8 on this machine.** `scripts/phase_f_report.py`'s `report.md`/`report.json`
+  writes used the platform-default encoding (`cp1252` on this Windows development
+  environment), which cannot represent the em dashes `reports.report`'s rendered
+  output embeds (e.g. "descriptive only — not a causal claim") — the byte sequence
+  it produced was not valid UTF-8 at all (confirmed: `open(..., 'rb').read()
+  .decode('utf-8')` raised `UnicodeDecodeError`), not merely a *different* valid
+  encoding. Any downstream tool assuming UTF-8 (nearly everything — browsers, most
+  JSON parsers, CI systems) would have silently mis-rendered or outright failed to
+  parse the file. Fixed by passing `encoding="utf-8"` explicitly to every
+  `write_text` call that embeds `reports`-rendered content. The earlier Phase
+  E/E.5 scripts' `write_text` calls were audited too and found to only ever write
+  pure-ASCII JSON (`{"deterministic": true}`-shaped), so they were not actually
+  affected — not "equally buggy but unnoticed," a real distinction confirmed by
+  inspection, not assumed.
+- **Chart provenance was recorded in `ChartResult.labels` but never rendered into
+  the image itself** — a PNG viewed on its own (outside a report, e.g. pasted
+  elsewhere) carried no visible indication of SIMULATION vs. LIVE provenance, the
+  exact ambiguity CLAUDE.md's "never fabricate... reliability numbers" discipline
+  exists to prevent. Fixed: every chart function now stamps its `label` into the
+  rendered figure itself (bottom-right corner), and `plot_baseline_vs_candidate`
+  — which previously hardcoded `labels=("SIMULATION",)` unconditionally, an
+  outright provenance bug if it were ever called with real comparison data — now
+  takes an explicit `label` parameter like every other chart function, defaulting
+  to `"SIMULATION"` only because every actual caller in this repo is synthetic
+  today. Regression-tested
+  (`test_simulation_label_is_baked_into_the_rendered_pixels_not_only_metadata`):
+  two otherwise-identical charts built with different labels now produce
+  different image bytes, proving the stamp is real pixel content, not just
+  metadata a test could check without actually verifying the image.
+
 This file will grow with specific, dated entries as each subsystem is implemented.

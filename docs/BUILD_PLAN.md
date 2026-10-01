@@ -20,7 +20,7 @@ phases; each phase stops for review before the next begins.
 | C | 12-17 | Eval schema, graders, benchmark runner, extraction/numeric/context/tool-use suites, consistency metrics | Done |
 | D | 18-24 | Static/rule/Pareto/reliability routers, learned routing (dataset, calibrated model, optional Torch), confidence/abstention | Done |
 | E | 25-29 | Agent simulator, chaos fault injection, recovery policies (retry/fallback/circuit-breaker/escalation), resilience suites | Done |
-| F | 30-32 | Statistics (CIs, comparisons), regression detection, report generation | Not started |
+| F | 30-32 | Statistics (CIs, comparisons), regression detection, report generation | Done |
 | G | 33-35 | CLI, FastAPI service, dashboard | Not started |
 | H | 36-41 | Test hardening, CI, performance, reproducibility docs, README, v0.1.0 release | Not started |
 

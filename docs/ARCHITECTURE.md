@@ -60,7 +60,7 @@ flowchart TD
 | `telemetry` | Trace events, rolling health metrics | Persist directly to disk (delegates to storage) |
 | `storage` | DuckDB schema, migrations, export. Batches all writes in one open transaction per store lifetime (`commit()` at `close()` or on demand) — see `docs/LIMITATIONS.md`'s Phase F entry for why this was necessary, not premature optimization | Contain domain logic |
 | `statistics` | Confidence intervals (bootstrap), significance tests (auto-selected paired/independent), effect sizes, multiple-comparison correction, Pareto frontier analysis, `ExperimentComparison`, regression detection | Be called from CLI/API handlers directly for business decisions; reduce an analysis to "significant/not significant" alone; claim causality |
-| `reports` | Render stored results into docs/charts | Compute new metrics not already stored |
+| `reports` | Generate `BenchmarkReport`s (Markdown/JSON) and charts (`matplotlib`, headless) entirely from `ExperimentStore` data via `statistics` | Compute new metrics not already available via `evals.metrics`/`statistics`; fabricate a value for unavailable data (renders "not available" instead) |
 | `api` | FastAPI HTTP boundary | Contain business logic |
 | `cli` | Typer command boundary | Contain business logic |
 

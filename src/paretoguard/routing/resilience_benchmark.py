@@ -49,14 +49,16 @@ to exercise it; an escalation_rate of 0.0 in this benchmark's output is
 expected, not a defect.
 """
 
+import platform
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from paretoguard import __version__
 from paretoguard.chaos.faults import ExpectedRecoverability, FaultCategory, ProviderFaultKind
 from paretoguard.chaos.injector import FaultInjector, FaultyProvider
 from paretoguard.chaos.policies import ConstantProbability, FaultPolicy
-from paretoguard.core.models import ModelSpec, OutcomeEvent
+from paretoguard.core.models import ModelSpec, OutcomeEvent, RunManifest
 from paretoguard.evals.metrics import ResilienceMetricsSummary, compute_resilience_metrics
 from paretoguard.evals.models import EvalSuite
 from paretoguard.providers.base import Provider
@@ -298,6 +300,22 @@ async def run_resilience_benchmark(
                 max_attempts=spec.max_attempts,
             )
             run_id = f"resilience-{suite.name}-{fault_level}-{spec.name}"
+            if store is not None:
+                store.record_run(
+                    RunManifest(
+                        run_id=run_id,
+                        paretoguard_version=__version__,
+                        os=platform.system(),
+                        python_version=platform.python_version(),
+                        seed=seed,
+                        suite_name=suite.name,
+                        suite_version=suite.version,
+                        router_name="static",
+                        router_config={"recovery_config": spec.name, "fault_level": fault_level},
+                        task_count=suite.case_count,
+                        label="SIMULATION",
+                    )
+                )
             cell_outcomes = []
             for case in suite.cases:
                 _, outcome = await executor.execute(case, run_id=run_id)

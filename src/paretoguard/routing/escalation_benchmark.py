@@ -48,12 +48,14 @@ outcomes" — compared against a control arm that skips validation entirely,
 not against some other recovery mechanism.
 """
 
+import platform
 from dataclasses import dataclass
 
+from paretoguard import __version__
 from paretoguard.chaos.faults import ExpectedRecoverability, FaultCategory, ProviderFaultKind
 from paretoguard.chaos.injector import FaultInjector, FaultyProvider
 from paretoguard.chaos.policies import ConstantProbability, FaultPolicy
-from paretoguard.core.models import Message, Role
+from paretoguard.core.models import Message, Role, RunManifest
 from paretoguard.evals.metrics import ResilienceMetricsSummary, compute_resilience_metrics
 from paretoguard.evals.models import EvalCase, EvalSuite, GraderConfig, GraderKind, GroundTruth
 from paretoguard.providers.base import Provider
@@ -159,6 +161,31 @@ async def run_escalation_scenario(
 ) -> EscalationComparisonResult:
     suite = build_suite(num_cases)
     injector = _fault_injector(quality_fault_rate=quality_fault_rate, seed=seed)
+
+    def _record_manifest(run_id: str, *, validate_quality: bool) -> None:
+        if store is None:
+            return
+        store.record_run(
+            RunManifest(
+                run_id=run_id,
+                paretoguard_version=__version__,
+                os=platform.system(),
+                python_version=platform.python_version(),
+                seed=seed,
+                suite_name=suite.name,
+                suite_version=suite.version,
+                router_name="static",
+                router_config={
+                    "validate_quality": validate_quality,
+                    "quality_fault_rate": quality_fault_rate,
+                },
+                task_count=suite.case_count,
+                label="SIMULATION",
+            )
+        )
+
+    _record_manifest("escalation-no_validation", validate_quality=False)
+    _record_manifest("escalation-validation_and_escalation", validate_quality=True)
 
     no_validation_policy = RecoveryPolicy(
         retry_policy=RecoveryRetryPolicy(max_same_candidate_attempts=0),

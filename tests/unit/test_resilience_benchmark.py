@@ -83,6 +83,24 @@ async def test_persists_outcome_events_through_the_normal_pipeline() -> None:
         assert all(isinstance(e, OutcomeEvent) for e in events)
 
 
+async def test_persists_a_run_manifest_for_every_cell() -> None:
+    """Regression test: a real end-to-end bug (scripts/phase_f_report.py)
+    found that this orchestrator persisted every per-task row but never
+    registered a RunManifest, so statistics.regression.check_regression/
+    reports.generate_report (both of which require store.get_run to
+    succeed) could never find these runs."""
+    suite = _small_suite(num_cases=4)
+    with ExperimentStore(":memory:") as store:
+        result = await run_resilience_benchmark(suite, fault_levels=[0.0], seed=0, store=store)
+        row = result.rows[0]
+        run_id = f"resilience-{suite.name}-{row.fault_level}-{row.recovery_config}"
+        manifest = store.get_run(run_id)
+        assert manifest is not None
+        assert manifest.label == "SIMULATION"
+        assert manifest.suite_name == suite.name
+        assert manifest.task_count == 4
+
+
 def test_candidate_providers_are_independent_fault_targets() -> None:
     assert len(CANDIDATE_PROVIDERS) == 3
     assert len(set(CANDIDATE_PROVIDERS)) == 3
