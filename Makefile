@@ -7,7 +7,7 @@ install-all:
 	uv sync --all-extras
 
 test:
-	uv run pytest tests/unit tests/integration tests/property tests/regression -v
+	uv run pytest tests/unit -v
 
 lint:
 	uv run ruff check .

@@ -25,7 +25,7 @@ No API keys are required to develop, test, or run the offline demo.
    uv run ruff check .
    uv run ruff format --check .
    uv run mypy src/paretoguard
-   uv run pytest tests/unit tests/integration tests/property tests/regression -v
+   uv run pytest tests/unit -v
    ```
 5. Update documentation in the same PR whenever you change behavior or a module
    boundary (see `docs/ARCHITECTURE.md`).
