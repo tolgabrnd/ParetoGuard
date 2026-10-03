@@ -34,6 +34,11 @@ dependencies = [
     "matplotlib>=3.11.2",
 ]
 
+[project.urls]
+Repository = "https://github.com/tolgabrnd/ParetoGuard"
+Issues = "https://github.com/tolgabrnd/ParetoGuard/issues"
+Changelog = "https://github.com/tolgabrnd/ParetoGuard/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 # OpenAI/Anthropic/Gemini adapters call each provider's REST API directly over
 # httpx (see src/paretoguard/providers/), not the official SDKs, so no SDK
